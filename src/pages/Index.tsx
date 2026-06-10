@@ -123,9 +123,9 @@ export default function Index() {
   const handleSend = async (text: string) => {
     const action: TokenAction = chatMode === 'image' ? 'image' : chatMode === 'video' ? 'video' : 'chat';
 
-    if (action === 'image' && !user) {
-      toast.error('Sign in required to use MockJ Image Studio.');
-      navigate('/auth');
+    if (!user) {
+      toast.error('Create a free MockJ account to use MLTX tokens.');
+      navigate('/auth?mode=signup');
       return;
     }
 
@@ -257,7 +257,7 @@ export default function Index() {
           spendTokens('image');
         }
       } else if (chatMode === 'video') {
-        const videoResult = await generateVideo({ prompt: text, style: 'cinematic', duration: '10s' });
+        const videoResult = await generateVideo({ prompt: text, style: 'cinematic', duration: '8s', aspectRatio: '16:9' });
         const aiMsg = buildMessage(
           'assistant',
           `Video generated: ${videoResult.label} · ${videoResult.duration}`,
@@ -405,6 +405,7 @@ export default function Index() {
               onOpenPromptLibrary={() => setShowLibrary(true)}
               onOpenPricing={() => setShowPricing(true)}
               onOpenAccount={() => navigate(user ? '/account' : '/auth')}
+              onOpenWallet={() => navigate('/tokens')}
               onOpenGallery={() => openImageStudio('history')}
               tokenBalance={tokenBalance}
               tokenCosts={tokenCosts}

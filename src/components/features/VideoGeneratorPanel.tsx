@@ -13,15 +13,15 @@ const STYLES: { value: VideoGenRequest['style']; label: string; desc: string; em
 ];
 
 const DURATIONS: { value: VideoGenRequest['duration']; label: string; seconds: number }[] = [
-  { value: '5s', label: '5 sec', seconds: 5 },
-  { value: '10s', label: '10 sec', seconds: 10 },
-  { value: '15s', label: '15 sec', seconds: 15 },
+  { value: '4s', label: '4 sec', seconds: 4 },
+  { value: '8s', label: '8 sec', seconds: 8 },
+  { value: '12s', label: '12 sec', seconds: 12 },
 ];
 
-const RATIOS = [
-  { value: '16:9', label: '16:9', desc: 'Landscape', soraRatio: 'landscape' },
-  { value: '9:16', label: '9:16', desc: 'Portrait', soraRatio: 'portrait' },
-  { value: '1:1', label: '1:1', desc: 'Square', soraRatio: 'square' },
+const RATIOS: { value: NonNullable<VideoGenRequest['aspectRatio']>; label: string; desc: string; engineRatio: string }[] = [
+  { value: '16:9', label: '16:9', desc: 'Landscape', engineRatio: 'landscape' },
+  { value: '9:16', label: '9:16', desc: 'Portrait', engineRatio: 'portrait' },
+  { value: '1:1', label: '1:1', desc: 'Square', engineRatio: 'square' },
 ];
 
 const PROMPT_IDEAS = [
@@ -33,7 +33,7 @@ const PROMPT_IDEAS = [
 
 const POLLING_STATUS_MESSAGES = [
   'Starting your video generation...',
-  'Sora AI is analyzing your prompt...',
+  'MockJ Video is analyzing your prompt...',
   'Rendering frames...',
   'Adding motion and lighting...',
   'Applying cinematic effects...',
@@ -56,8 +56,8 @@ export default function VideoGeneratorPanel() {
   const [panelMode, setPanelMode] = useState<PanelMode>('generate');
   const [prompt, setPrompt] = useState('');
   const [style, setStyle] = useState<VideoGenRequest['style']>('cinematic');
-  const [duration, setDuration] = useState<VideoGenRequest['duration']>('5s');
-  const [ratio, setRatio] = useState('16:9');
+  const [duration, setDuration] = useState<VideoGenRequest['duration']>('8s');
+  const [ratio, setRatio] = useState<NonNullable<VideoGenRequest['aspectRatio']>>('16:9');
 
   const [taskStatus, setTaskStatus] = useState<TaskStatus>('idle');
   const [predictionId, setPredictionId] = useState<string | null>(null);
@@ -222,6 +222,9 @@ export default function VideoGeneratorPanel() {
   };
 
   const isLoading = taskStatus === 'creating' || taskStatus === 'polling';
+  const selectedStyle = STYLES.find(s => s.value === style) ?? STYLES[0];
+  const selectedDuration = DURATIONS.find(d => d.value === duration) ?? DURATIONS[1];
+  const selectedRatio = RATIOS.find(r => r.value === ratio) ?? RATIOS[0];
 
   const formatElapsed = (s: number) => {
     const m = Math.floor(s / 60);
@@ -249,7 +252,7 @@ export default function VideoGeneratorPanel() {
               <h2 className="font-bold text-sm text-foreground" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>
                 Video Studio
               </h2>
-              <p className="text-[10px] text-muted-foreground">Powered by OpenAI Sora 2</p>
+              <p className="text-[10px] text-muted-foreground">Powered by MLTXPRO Video</p>
             </div>
           </div>
 
@@ -315,7 +318,11 @@ export default function VideoGeneratorPanel() {
                       : 'border-border text-muted-foreground hover:border-[hsl(224_15%_22%)] hover:text-foreground'
                   )}
                 >
-                  <span>{s.emoji}</span> {s.label}
+                  <span aria-hidden="true">{s.emoji}</span>
+                  <span className="flex min-w-0 flex-col text-left leading-tight">
+                    <span className="font-semibold">{s.label}</span>
+                    <span className="text-[9px] opacity-75">{s.desc}</span>
+                  </span>
                 </button>
               ))}
             </div>
@@ -371,7 +378,7 @@ export default function VideoGeneratorPanel() {
               <div className="flex items-start gap-3">
                 <Film className="mt-0.5 h-4 w-4 text-[hsl(191_97%_60%)]" />
                 <div>
-                  <p className="text-xs font-bold text-foreground">Saved Sora videos</p>
+                  <p className="text-xs font-bold text-foreground">Saved MockJ videos</p>
                   <p className="mt-1 text-[11px] leading-5 text-muted-foreground">
                     Loads generated MP4 files from the Supabase <span className="font-semibold text-[hsl(191_97%_62%)]">videos</span> bucket.
                   </p>
@@ -472,7 +479,7 @@ export default function VideoGeneratorPanel() {
                 <History className="mb-3 h-8 w-8 text-[hsl(191_97%_55%_/_0.55)]" />
                 <p className="text-sm font-semibold text-foreground">No saved videos yet</p>
                 <p className="mt-1 max-w-sm text-xs leading-5 text-muted-foreground">
-                  Generate a Sora video and MockJ will store the finished MP4 in the Supabase videos bucket.
+                  Generate a MockJ video and the app will store the finished MP4 in your videos bucket.
                 </p>
               </div>
             )}
@@ -548,11 +555,13 @@ export default function VideoGeneratorPanel() {
               Your studio is ready
             </h3>
             <p className="text-sm text-muted-foreground leading-relaxed mb-4">
-              Describe a scene and let Sora AI bring it to life as a real video.
+              Describe a scene and let MockJ Video bring it to life as a real video.
             </p>
             <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-[hsl(191_97%_55%_/_0.08)] border border-[hsl(191_97%_55%_/_0.2)]">
               <Clock className="w-3 h-3 text-[hsl(191_97%_55%)]" />
-              <span className="text-[11px] text-[hsl(191_97%_55%)]">Generation takes 1–3 minutes</span>
+              <span className="text-[11px] text-[hsl(191_97%_55%)]">
+                {selectedStyle.label} only · {selectedDuration.label} · {selectedRatio.desc} {selectedRatio.label} · 1–3 min
+              </span>
             </div>
           </div>
         )}
@@ -575,7 +584,7 @@ export default function VideoGeneratorPanel() {
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <Loader2 className="w-4 h-4 text-[hsl(191_97%_55%)] animate-spin" />
-                  <span className="text-sm font-medium text-foreground">Generating with Sora 2</span>
+                  <span className="text-sm font-medium text-foreground">Generating with MockJ Video</span>
                 </div>
                 <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
                   <Clock className="w-3 h-3" />
@@ -645,7 +654,7 @@ export default function VideoGeneratorPanel() {
               {/* Success badge */}
               <div className="absolute top-3 left-3 flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[hsl(191_97%_55%_/_0.15)] border border-[hsl(191_97%_55%_/_0.4)] backdrop-blur-sm">
                 <CheckCircle2 className="w-3 h-3 text-[hsl(191_97%_55%)]" />
-                <span className="text-[10px] font-semibold text-[hsl(191_97%_55%)]">MockJ · Generated by Sora 2</span>
+                <span className="text-[10px] font-semibold text-[hsl(191_97%_55%)]">MockJ · Generated by MLTXPRO</span>
               </div>
             </div>
 
@@ -653,7 +662,7 @@ export default function VideoGeneratorPanel() {
               <div className="flex-1 min-w-0">
                 <p className="text-xs text-muted-foreground truncate">"{prompt}"</p>
                 <p className="text-[10px] text-muted-foreground/50 mt-0.5">
-                  {STYLES.find(s => s.value === style)?.label} · {duration} · {ratio}
+                  {selectedStyle.label} only · {selectedDuration.label} · {selectedRatio.desc} {selectedRatio.label}
                   {' · '}{formatElapsed(elapsedSeconds)} to generate
                 </p>
               </div>

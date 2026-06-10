@@ -232,6 +232,30 @@ function styleHint(style = 'realistic') {
   return styleGuides[style] ?? styleGuides.realistic;
 }
 
+function videoStyleHint(style = 'cinematic') {
+  const styleGuides: Record<string, string> = {
+    cinematic: 'Cinematic only: live-action film language, film-grade lighting, realistic camera movement, lens depth, and motion-picture color grade. Avoid animation, documentary, and abstract-only visual language.',
+    animation: 'Animation only: stylized animated motion, vivid illustrative rendering, expressive timing, and polished animated camera movement. Avoid live-action documentary realism and abstract-only visuals.',
+    documentary: 'Documentary only: natural real-world footage, observational camera, grounded movement, authentic lighting, and realistic scene behavior. Avoid stylized animation, cinematic VFX, and abstract visuals.',
+    abstract: 'Abstract only: non-literal artistic motion, surreal forms, geometric movement, expressive color, and conceptual visual rhythm. Avoid documentary realism, live-action narrative footage, and character animation.',
+  };
+  return styleGuides[style] ?? styleGuides.cinematic;
+}
+
+function videoPrompt(prompt: string, style?: string) {
+  return `${prompt.trim()}\n\nVideo style directive: ${videoStyleHint(style)} The selected style is mandatory for this generation.`.trim();
+}
+
+function videoDurationSeconds(duration?: number) {
+  return duration === 4 || duration === 8 || duration === 12 ? duration : 8;
+}
+
+function videoAspectRatio(aspectRatio?: string) {
+  if (aspectRatio === 'portrait' || aspectRatio === '9:16') return 'portrait';
+  if (aspectRatio === 'square' || aspectRatio === '1:1') return 'square';
+  return 'landscape';
+}
+
 function envModelOverride(version: string) {
   const envKey = `ONSPACE_IMAGE_MODEL_${version.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`;
   return Deno.env.get(envKey);
@@ -239,16 +263,16 @@ function envModelOverride(version: string) {
 
 function imageModel(version = 'gemini-2.5-flash-image') {
   const modelGuides: Record<string, string> = {
-    'gemini-2.5-flash-image': 'MockJ native Gemini 2.5 Flash Image profile: fast, prompt-faithful, clean commercial output',
-    'hf-flux-dev': 'Hugging Face FLUX.1 dev profile: high detail, cinematic lighting, strong prompt adherence',
-    'hf-flux-schnell': 'Hugging Face FLUX.1 schnell profile: fast iteration, bold composition, clean edges',
-    'hf-sdxl': 'Hugging Face Stable Diffusion XL profile: polished general image generation, balanced realism and art direction',
-    'hf-sd35-large': 'Hugging Face Stable Diffusion 3.5 Large profile: premium photoreal detail, accurate textures, editorial finish',
-    'hf-playground-v25': 'Hugging Face Playground v2.5 profile: graphic polish, vibrant color, social-ready creative direction',
-    'hf-dreamshaper-xl': 'Hugging Face DreamShaper XL profile: stylized fantasy, portrait, and concept art finish',
-    'hf-realvis-xl': 'Hugging Face RealVisXL profile: realistic human portraits, product lighting, natural camera feel',
-    'hf-openjourney': 'Hugging Face OpenJourney profile: cinematic concept-art composition and dramatic painterly detail',
-    'hf-kandinsky-3': 'Hugging Face Kandinsky 3 profile: expressive art direction, rich color, surreal editorial mood',
+    'gemini-2.5-flash-image': 'MockJ Native profile: fast, prompt-faithful, clean commercial output',
+    'hf-flux-dev': 'MockJ Detail profile: high detail, cinematic lighting, strong prompt adherence',
+    'hf-flux-schnell': 'MockJ Draft profile: fast iteration, bold composition, clean edges',
+    'hf-sdxl': 'MockJ Balanced profile: polished general image generation, balanced realism and art direction',
+    'hf-sd35-large': 'MockJ Editorial profile: premium photoreal detail, accurate textures, editorial finish',
+    'hf-playground-v25': 'MockJ Social profile: graphic polish, vibrant color, social-ready creative direction',
+    'hf-dreamshaper-xl': 'MockJ Fantasy profile: stylized fantasy, portrait, and concept art finish',
+    'hf-realvis-xl': 'MockJ Real profile: realistic human portraits, product lighting, natural camera feel',
+    'hf-openjourney': 'MockJ Cinema profile: cinematic concept-art composition and dramatic painterly detail',
+    'hf-kandinsky-3': 'MockJ Expressive profile: expressive art direction, rich color, surreal editorial mood',
   };
 
   return {
@@ -447,15 +471,17 @@ Deno.serve(async (req: Request) => {
     if (body.type === 'video-create') {
       const videoBody = body as VideoCreateBody;
       if (!videoBody.prompt?.trim()) return errorResponse(400, 'missing_prompt', 'Prompt is required.');
+      const seconds = videoDurationSeconds(videoBody.duration);
+      const aspectRatio = videoAspectRatio(videoBody.aspectRatio);
 
       const createRes = await fetchWithRetry(`${baseUrl}/models/openai/sora-2/predictions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
         body: JSON.stringify({
           input: {
-            prompt: videoBody.prompt.trim(),
-            seconds: videoBody.duration ?? 5,
-            aspect_ratio: videoBody.aspectRatio ?? 'landscape',
+            prompt: videoPrompt(videoBody.prompt, videoBody.style),
+            seconds,
+            aspect_ratio: aspectRatio,
           },
         }),
       }, 'video-create');

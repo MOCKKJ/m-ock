@@ -1,17 +1,24 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Eye, EyeOff, Mail, Lock, User, ArrowRight, Loader2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import logoImg from '@/assets/mockj-logo.png';
 import { useAuthActions } from '@/hooks/useAuthActions';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { useAuth } from '@/contexts/AuthContext';
+
+function safeRedirectPath(path?: string | null) {
+  if (!path || !path.startsWith('/') || path.startsWith('//')) return '/';
+  return path;
+}
 
 export default function AuthPage() {
   const [mode, setMode] = useState<'login' | 'signup' | 'reset' | 'update-password'>(() => {
     if (typeof window === 'undefined') return 'login';
     const params = new URLSearchParams(window.location.search);
-    return params.get('reset') === 'password' || window.location.hash.includes('type=recovery')
-      ? 'update-password'
-      : 'login';
+    if (params.get('reset') === 'password' || window.location.hash.includes('type=recovery')) {
+      return 'update-password';
+    }
+    return params.get('mode') === 'signup' ? 'signup' : 'login';
   });
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -19,12 +26,20 @@ export default function AuthPage() {
   const [otp, setOtp] = useState('');
   const [showPass, setShowPass] = useState(false);
 
-  const { sendOtp, verifyOtpAndSetPassword, signInWithPassword, resetPassword, updatePassword, loading, otpSent, setOtpSent } =
+  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const redirectPath = safeRedirectPath(searchParams.get('redirect'));
+  const { user, loading: authLoading } = useAuth();
+  const { sendOtp, verifyOtpAndSetPassword, signInWithPassword, signInWithGoogle, resetPassword, updatePassword, loading, otpSent, setOtpSent } =
     useAuthActions();
+
+  useEffect(() => {
+    if (!authLoading && user) navigate(redirectPath);
+  }, [authLoading, navigate, redirectPath, user]);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    await signInWithPassword(email, password);
+    await signInWithPassword(email, password, redirectPath);
   };
 
   const handleSignupStep1 = async (e: React.FormEvent) => {
@@ -34,7 +49,7 @@ export default function AuthPage() {
 
   const handleSignupStep2 = async (e: React.FormEvent) => {
     e.preventDefault();
-    await verifyOtpAndSetPassword(email, otp, password, username);
+    await verifyOtpAndSetPassword(email, otp, password, username, redirectPath);
   };
 
   const handleResetPassword = async (e: React.FormEvent) => {
@@ -103,6 +118,25 @@ export default function AuthPage() {
               </button>
             ))}
           </div>
+          )}
+
+          {mode !== 'update-password' && mode !== 'reset' && (
+            <div className="mb-5 space-y-4">
+              <button
+                type="button"
+                onClick={() => signInWithGoogle(redirectPath)}
+                disabled={loading}
+                className="w-full flex items-center justify-center gap-2 bg-white text-[hsl(224_20%_6%)] font-semibold py-2.5 rounded-xl text-sm hover:bg-white/90 transition-all duration-200 active:scale-[0.98] disabled:opacity-60 disabled:cursor-not-allowed"
+              >
+                {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <span className="font-black">G</span>}
+                Continue with Google
+              </button>
+              <div className="flex items-center gap-3">
+                <div className="h-px flex-1 bg-border" />
+                <span className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">or use email</span>
+                <div className="h-px flex-1 bg-border" />
+              </div>
+            </div>
           )}
 
           {/* Login Form */}
