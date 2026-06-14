@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useMemo, useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Crown, Zap, MessageSquare, Image, Video, Calendar, CreditCard,
@@ -7,10 +7,12 @@ import {
 } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useUsageLimits } from '@/hooks/useUsageLimits';
+import { useTokenWallet } from '@/hooks/useTokenWallet';
 import { supabase } from '@/lib/supabase';
 import { postAuthedApi } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
+import PricingModal from '@/components/features/PricingModal';
 import logoImg from '@/assets/mockj-logo.png';
 
 const FREE_LIMITS = { chat: 10, image: 10, video: 1 };
@@ -191,9 +193,11 @@ function AvatarUpload({ userId, currentAvatar }: { userId: string; currentAvatar
 export default function AccountPage() {
   const navigate = useNavigate();
   const { user, subscription, refreshSubscription } = useAuth();
-  const { getRemaining, getLimit } = useUsageLimits();
+  const { getRemaining } = useUsageLimits();
+  const { tokenBalance, starterBalance } = useTokenWallet();
   const [portalLoading, setPortalLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [showPricing, setShowPricing] = useState(false);
 
   const isPro = subscription.subscribed;
   const tierLabel = subscription.tier === 'sale' ? 'Intro' : 'Pro';
@@ -202,6 +206,25 @@ export default function AccountPage() {
         year: 'numeric', month: 'long', day: 'numeric',
       })
     : null;
+  const accountStartedAt = useMemo(() => {
+    if (!user) return null;
+
+    const key = `mockj_account_started_${user.id}`;
+    try {
+      const existing = localStorage.getItem(key);
+      if (existing) return existing;
+
+      const created = new Date().toISOString();
+      localStorage.setItem(key, created);
+      return created;
+    } catch {
+      return new Date().toISOString();
+    }
+  }, [user]);
+  const daysActive = accountStartedAt
+    ? Math.max(1, Math.ceil((Date.now() - new Date(accountStartedAt).getTime()) / 86_400_000))
+    : 0;
+  const tokenProgress = starterBalance > 0 ? Math.min(100, (tokenBalance / starterBalance) * 100) : 0;
 
   const usageMetrics = [
     {
@@ -315,6 +338,61 @@ export default function AccountPage() {
           )}
         </div>
 
+        {/* Subscription status */}
+        <div className="rounded-2xl border border-[hsl(4_90%_58%_/_0.28)] bg-[hsl(224_15%_8%)] p-5 shadow-[0_0_30px_hsl(4_90%_58%_/_0.05)]">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Subscription Status</p>
+              <h2 className="mt-1 text-lg font-black text-foreground" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>
+                {isPro ? `MockJ ${tierLabel}` : 'Free Plan'}
+              </h2>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {isPro ? 'Unlimited creator access is active.' : 'Free access with daily limits and MLTX token spending.'}
+              </p>
+            </div>
+            {isPro ? (
+              <button
+                type="button"
+                onClick={handleManageSubscription}
+                disabled={portalLoading || !user}
+                className="inline-flex items-center justify-center gap-2 rounded-xl border border-[hsl(4_90%_58%_/_0.42)] bg-[hsl(4_90%_58%_/_0.12)] px-4 py-2 text-xs font-black text-[hsl(4_90%_68%)] transition hover:bg-[hsl(4_90%_58%_/_0.18)] disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {portalLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CreditCard className="h-3.5 w-3.5" />}
+                Manage Billing
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setShowPricing(true)}
+                className="inline-flex items-center justify-center gap-2 rounded-xl bg-[hsl(4_90%_58%)] px-4 py-2 text-xs font-black text-white transition hover:bg-[hsl(4_90%_64%)] active:scale-95"
+              >
+                <Crown className="h-3.5 w-3.5" />
+                Upgrade to Pro
+              </button>
+            )}
+          </div>
+
+          <div className="mt-4 grid gap-3 sm:grid-cols-3">
+            <div className="rounded-xl border border-border bg-[hsl(224_15%_6%)] p-3">
+              <p className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">Current plan</p>
+              <p className="mt-1 text-sm font-bold text-foreground">{isPro ? tierLabel : 'Free'}</p>
+            </div>
+            <div className="rounded-xl border border-border bg-[hsl(224_15%_6%)] p-3">
+              <p className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">{isPro ? 'Renewal date' : 'Tokens remaining'}</p>
+              <p className="mt-1 text-sm font-bold text-foreground">{isPro ? (renewDate ?? 'Active') : tokenBalance.toLocaleString()}</p>
+              {!isPro && (
+                <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-[hsl(224_15%_14%)]">
+                  <div className="h-full rounded-full bg-[hsl(38_95%_60%)] transition-all duration-700" style={{ width: `${tokenProgress}%` }} />
+                </div>
+              )}
+            </div>
+            <div className="rounded-xl border border-border bg-[hsl(224_15%_6%)] p-3">
+              <p className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">{isPro ? 'Tier' : 'Days active'}</p>
+              <p className="mt-1 text-sm font-bold text-foreground">{isPro ? tierLabel : daysActive}</p>
+            </div>
+          </div>
+        </div>
+
         {/* Plan card */}
         <div
           className={cn(
@@ -422,7 +500,7 @@ export default function AccountPage() {
                     Unlock unlimited chat, images, videos, MLTXPRO Voice, and advanced creator tools.
                   </p>
                   <button
-                    onClick={() => navigate('/')}
+                    onClick={() => setShowPricing(true)}
                     className="mt-3 flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-bold text-white hover:opacity-90 transition-all active:scale-95"
                     style={{ background: 'hsl(265 80% 65%)', boxShadow: '0 0 14px hsl(265 80% 65% / 0.3)' }}
                   >
@@ -486,6 +564,8 @@ export default function AccountPage() {
         )}
 
         {/* Signed-out state */}
+        {showPricing && <PricingModal onClose={() => setShowPricing(false)} />}
+
         {!user && (
           <div className="flex flex-col items-center gap-4 p-8 rounded-2xl border border-dashed border-border text-center">
             <Lock className="w-8 h-8 text-muted-foreground opacity-40" />

@@ -1,8 +1,8 @@
 import { useState, useRef, KeyboardEvent, useEffect, useCallback } from 'react';
-import { Send, Image, Video, MessageSquare, Mic, MicOff, BrainCircuit } from 'lucide-react';
+import { Send, Image, Video, MessageSquare, Mic, MicOff, BrainCircuit, PhoneCall, Radio, Volume2, VolumeX, X } from 'lucide-react';
 import { ChatMode } from '@/types/chat';
 import { cn } from '@/lib/utils';
-import { AUTO_SPEAK_EVENT_NAME, getAutoSpeak } from '@/hooks/useAutoSpeak';
+import { AUTO_SPEAK_EVENT_NAME, getAutoSpeak, toggleAutoSpeak } from '@/hooks/useAutoSpeak';
 
 interface ChatInputProps {
   mode: ChatMode;
@@ -87,10 +87,15 @@ export default function ChatInput({ mode, onModeChange, onSend, disabled, pendin
   const [autoSpeakEnabled, setAutoSpeakEnabled] = useState(() => getAutoSpeak());
   const [wakeListening, setWakeListening] = useState(false);
   const [wakeStatus, setWakeStatus] = useState<'idle' | 'heard' | 'blocked'>('idle');
+  const [showVoiceChat, setShowVoiceChat] = useState(false);
+  const [voiceChatTranscript, setVoiceChatTranscript] = useState('');
+  const [voiceChatStatus, setVoiceChatStatus] = useState<'idle' | 'listening' | 'blocked'>('idle');
+  const [liveMode, setLiveMode] = useState(false);
   const [hasVoiceSupport] = useState(
     () => !!(window.SpeechRecognition || window.webkitSpeechRecognition)
   );
   const recognitionRef = useRef<SpeechRecognition | null>(null);
+  const voiceChatRecognitionRef = useRef<SpeechRecognition | null>(null);
   const wakeRecognitionRef = useRef<SpeechRecognition | null>(null);
   const wakeShouldListenRef = useRef(false);
   const awaitingWakeCommandRef = useRef(false);
@@ -183,6 +188,69 @@ export default function ChatInput({ mode, onModeChange, onSend, disabled, pendin
     }
     wakeRecognitionRef.current = null;
   }, []);
+
+  const handleAutoSpeakToggle = useCallback(() => {
+    const enabled = toggleAutoSpeak();
+    setAutoSpeakEnabled(enabled);
+    if (!enabled) {
+      stopWakeRecognition();
+    }
+  }, [stopWakeRecognition]);
+
+  const handleVoiceChatMic = useCallback(() => {
+    if (!hasVoiceSupport || disabledRef.current) return;
+
+    if (voiceChatStatus === 'listening') {
+      voiceChatRecognitionRef.current?.stop();
+      setVoiceChatStatus('idle');
+      return;
+    }
+
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const recognition = new SR();
+    recognition.lang = 'en-US';
+    recognition.interimResults = true;
+    recognition.continuous = false;
+    voiceChatRecognitionRef.current = recognition;
+    let finalTranscript = '';
+
+    recognition.onresult = (e: SpeechRecognitionEvent) => {
+      const transcript = Array.from(e.results)
+        .map(r => r[0].transcript)
+        .join('')
+        .trim();
+      finalTranscript = transcript;
+      setVoiceChatTranscript(transcript);
+    };
+
+    recognition.onerror = (e: SpeechRecognitionErrorEvent) => {
+      setVoiceChatStatus(e.error === 'not-allowed' || e.error === 'service-not-allowed' ? 'blocked' : 'idle');
+    };
+
+    recognition.onend = () => {
+      setVoiceChatStatus('idle');
+      voiceChatRecognitionRef.current = null;
+      const command = finalTranscript.trim();
+      if (!command) return;
+
+      if (liveMode || showVoiceChat) {
+        submitWakeCommand(command);
+        setVoiceChatTranscript('');
+      } else {
+        setValue(command);
+        setTimeout(autoResize, 0);
+      }
+    };
+
+    try {
+      setVoiceChatTranscript('');
+      recognition.start();
+      setVoiceChatStatus('listening');
+    } catch {
+      setVoiceChatStatus('idle');
+      voiceChatRecognitionRef.current = null;
+    }
+  }, [autoResize, hasVoiceSupport, liveMode, showVoiceChat, submitWakeCommand, voiceChatStatus]);
 
   const startWakeRecognition = useCallback(() => {
     if (!hasVoiceSupport || !getAutoSpeak() || disabledRef.current || isRecordingRef.current) {
@@ -299,7 +367,10 @@ export default function ChatInput({ mode, onModeChange, onSend, disabled, pendin
 
   // Cleanup on unmount
   useEffect(() => {
-    return () => recognitionRef.current?.stop();
+    return () => {
+      recognitionRef.current?.stop();
+      voiceChatRecognitionRef.current?.stop();
+    };
   }, []);
 
   // Auto-fill pending prompt from Prompt Library
@@ -416,6 +487,7 @@ export default function ChatInput({ mode, onModeChange, onSend, disabled, pendin
               onClick={handleMicClick}
               disabled={disabled}
               aria-label={isRecording ? 'Stop recording' : 'Voice input'}
+              title={isRecording ? 'Stop recording' : 'Voice input'}
               className={cn(
                 'relative w-8 h-8 rounded-lg flex items-center justify-center transition-all duration-200 disabled:opacity-40',
                 isRecording
@@ -432,6 +504,36 @@ export default function ChatInput({ mode, onModeChange, onSend, disabled, pendin
               ) : (
                 <Mic className="w-3.5 h-3.5" />
               )}
+            </button>
+          )}
+          {hasVoiceSupport && (
+            <button
+              type="button"
+              onClick={handleAutoSpeakToggle}
+              disabled={disabled}
+              aria-label={autoSpeakEnabled ? 'Disable Hey Mock' : 'Enable Hey Mock'}
+              title={autoSpeakEnabled ? 'Hey Mock listening is ON' : 'Enable Hey Mock listening'}
+              className={cn(
+                'relative w-8 h-8 rounded-lg flex items-center justify-center transition-all duration-200 disabled:opacity-40',
+                autoSpeakEnabled
+                  ? 'border border-[hsl(191_97%_55%_/_0.55)] bg-[hsl(191_97%_55%_/_0.12)] text-[hsl(191_97%_55%)]'
+                  : 'border border-border text-muted-foreground hover:text-foreground hover:border-[hsl(224_15%_24%)]'
+              )}
+            >
+              <Radio className="w-3.5 h-3.5" />
+              {wakeListening && <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-[hsl(191_97%_55%)] animate-pulse" />}
+            </button>
+          )}
+          {hasVoiceSupport && (
+            <button
+              type="button"
+              onClick={() => setShowVoiceChat(true)}
+              disabled={disabled}
+              aria-label="Open voice chat"
+              title="Open voice chat"
+              className="w-8 h-8 rounded-lg flex items-center justify-center transition-all duration-200 border border-[hsl(265_80%_65%_/_0.35)] bg-[hsl(265_80%_65%_/_0.08)] text-[hsl(265_80%_65%)] hover:bg-[hsl(265_80%_65%_/_0.2)] disabled:opacity-40"
+            >
+              <PhoneCall className="w-3.5 h-3.5" />
             </button>
           )}
           <button
@@ -451,6 +553,91 @@ export default function ChatInput({ mode, onModeChange, onSend, disabled, pendin
           </button>
         </div>
       </div>
+
+      {showVoiceChat && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 backdrop-blur-sm" onClick={() => setShowVoiceChat(false)}>
+          <div className="w-full max-w-sm rounded-2xl border border-border bg-[hsl(224_20%_7%)] shadow-2xl" onClick={event => event.stopPropagation()}>
+            <div className="flex items-center gap-3 border-b border-border px-4 py-3">
+              <div className="flex h-8 w-8 items-center justify-center rounded-lg border border-[hsl(4_90%_58%_/_0.35)] bg-[hsl(4_90%_58%_/_0.12)]">
+                <Mic className="h-4 w-4 text-[hsl(4_90%_58%)]" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-black text-foreground">Voice Chat</p>
+                <p className="text-[11px] text-muted-foreground">Tap mic to speak</p>
+              </div>
+              <button
+                type="button"
+                onClick={handleAutoSpeakToggle}
+                className="flex h-8 w-8 items-center justify-center rounded-lg border border-border text-muted-foreground transition hover:text-foreground"
+                title={autoSpeakEnabled ? 'Voice replies on' : 'Voice replies off'}
+              >
+                {autoSpeakEnabled ? <Volume2 className="h-3.5 w-3.5" /> : <VolumeX className="h-3.5 w-3.5" />}
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowVoiceChat(false)}
+                className="flex h-8 w-8 items-center justify-center rounded-lg border border-border text-muted-foreground transition hover:text-foreground"
+                title="Close voice chat"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+            <div className="flex flex-col items-center gap-5 px-5 py-8">
+              <button
+                type="button"
+                onClick={handleVoiceChatMic}
+                disabled={disabled || !hasVoiceSupport}
+                className={cn(
+                  'relative flex h-24 w-24 items-center justify-center rounded-full border transition-all duration-200 disabled:opacity-40',
+                  voiceChatStatus === 'listening'
+                    ? 'scale-105 border-[hsl(191_97%_55%)] bg-[hsl(191_97%_55%_/_0.18)] text-[hsl(191_97%_55%)] shadow-[0_0_30px_hsl(191_97%_55%_/_0.22)]'
+                    : 'border-border bg-[hsl(224_15%_11%)] text-muted-foreground hover:text-foreground'
+                )}
+                aria-label={voiceChatStatus === 'listening' ? 'Stop voice chat recording' : 'Start voice chat recording'}
+              >
+                <Mic className="h-8 w-8" />
+                {voiceChatStatus === 'listening' && <span className="absolute inset-0 rounded-full border border-[hsl(191_97%_55%_/_0.45)] animate-ping" />}
+              </button>
+              <div className="text-center">
+                <p className="text-sm font-bold text-foreground">
+                  {voiceChatStatus === 'listening' ? 'Listening...' : voiceChatStatus === 'blocked' ? 'Microphone blocked' : 'Tap to speak'}
+                </p>
+                {voiceChatTranscript && <p className="mt-2 text-xs italic text-muted-foreground">"{voiceChatTranscript}"</p>}
+              </div>
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={handleAutoSpeakToggle}
+                  className={cn(
+                    'flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-semibold transition',
+                    autoSpeakEnabled
+                      ? 'border-[hsl(4_90%_58%_/_0.4)] bg-[hsl(4_90%_58%_/_0.1)] text-[hsl(4_90%_58%)]'
+                      : 'border-border text-muted-foreground hover:text-foreground'
+                  )}
+                >
+                  {autoSpeakEnabled ? <Volume2 className="h-3.5 w-3.5" /> : <VolumeX className="h-3.5 w-3.5" />}
+                  {autoSpeakEnabled ? 'Voice ON' : 'Voice OFF'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setLiveMode(enabled => !enabled)}
+                  className={cn(
+                    'flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-semibold transition',
+                    liveMode
+                      ? 'border-[hsl(142_70%_55%_/_0.5)] bg-[hsl(142_70%_55%_/_0.1)] text-[hsl(142_70%_55%)]'
+                      : 'border-border text-muted-foreground hover:text-foreground'
+                  )}
+                  title="Continuous conversation mode"
+                >
+                  <span className={cn('h-1.5 w-1.5 rounded-full', liveMode ? 'bg-[hsl(142_70%_55%)] animate-pulse' : 'bg-muted-foreground/40')} />
+                  {liveMode ? 'Live Mode ON' : 'Live Mode'}
+                </button>
+              </div>
+              {!hasVoiceSupport && <p className="text-xs text-[hsl(38_95%_60%)]">Voice Chat requires a browser with Web Speech support.</p>}
+            </div>
+          </div>
+        </div>
+      )}
 
       <p className="text-[10px] text-muted-foreground/40 text-center mt-2">
         {autoSpeakEnabled && hasVoiceSupport

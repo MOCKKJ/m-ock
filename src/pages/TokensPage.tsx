@@ -31,6 +31,16 @@ import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 
 type TokenTab = 'overview' | 'shop' | 'earn' | 'referral' | 'history';
+type ConfettiPiece = {
+  id: number;
+  left: number;
+  color: string;
+  tx: number;
+  rotate: number;
+  delay: number;
+  duration: number;
+  size: number;
+};
 
 const TABS: { id: TokenTab; label: string; icon: typeof Coins }[] = [
   { id: 'overview', label: 'Overview', icon: Coins },
@@ -54,6 +64,8 @@ const CATEGORY_TONE: Record<TokenCatalogItem['category'], string> = {
   voice: 'text-[hsl(38_95%_65%)] bg-[hsl(38_95%_60%_/_0.12)] border-[hsl(38_95%_60%_/_0.28)]',
 };
 
+const CONFETTI_COLORS = ['#ff3b30', '#ff9f0a', '#ffd60a', '#30d158', '#0a84ff', '#bf5af2'];
+
 export default function TokensPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -74,6 +86,7 @@ export default function TokensPage() {
   const [selectedId, setSelectedId] = useState<TokenCatalogId>('chat-basic');
   const [referralInput, setReferralInput] = useState('');
   const [copiedReferral, setCopiedReferral] = useState(false);
+  const [confettiPieces, setConfettiPieces] = useState<ConfettiPiece[]>([]);
 
   const selected = useMemo(
     () => TOKEN_COST_CATALOG.find(item => item.id === selectedId) ?? TOKEN_COST_CATALOG[0],
@@ -173,8 +186,84 @@ export default function TokensPage() {
     }
   };
 
+  const fireConfettiBurst = () => {
+    const pieces = Array.from({ length: 30 }, (_, index) => ({
+      id: Date.now() + index,
+      left: 34 + Math.random() * 32,
+      color: CONFETTI_COLORS[index % CONFETTI_COLORS.length],
+      tx: Math.round((Math.random() - 0.5) * 420),
+      rotate: Math.round((Math.random() - 0.5) * 900),
+      delay: Math.random() * 0.15,
+      duration: 0.85 + Math.random() * 0.55,
+      size: 6 + Math.random() * 6,
+    }));
+
+    setConfettiPieces(pieces);
+    window.setTimeout(() => setConfettiPieces([]), 1700);
+
+    const dynamicImport = new Function('specifier', 'return import(specifier)') as (
+      specifier: string
+    ) => Promise<{ default?: (options: Record<string, unknown>) => void }>;
+
+    dynamicImport('canvas-confetti')
+      .then(module => {
+        module.default?.({
+          particleCount: 60,
+          spread: 68,
+          origin: { y: 0.68 },
+          colors: CONFETTI_COLORS,
+        });
+      })
+      .catch(() => {
+        // CSS/DOM confetti above is the primary implementation.
+      });
+  };
+
+  const handleDailyStreakClaim = () => {
+    if (!user) {
+      requireAccount();
+      return;
+    }
+
+    fireConfettiBurst();
+    toast.success('Daily streak checked. Come back tomorrow.');
+  };
+
   return (
     <div className="min-h-screen bg-background text-foreground">
+      <style>
+        {`
+          @keyframes mockj-confetti-burst {
+            0% {
+              opacity: 1;
+              transform: translate3d(0, 0, 0) rotate(0deg);
+            }
+            100% {
+              opacity: 0;
+              transform: translate3d(var(--tx), 58vh, 0) rotate(var(--rot));
+            }
+          }
+        `}
+      </style>
+      {confettiPieces.length > 0 && (
+        <div className="pointer-events-none fixed inset-0 z-[80] overflow-hidden" aria-hidden="true">
+          {confettiPieces.map(piece => (
+            <span
+              key={piece.id}
+              className="absolute top-[38%] rounded-[2px]"
+              style={{
+                left: `${piece.left}%`,
+                width: `${piece.size}px`,
+                height: `${piece.size * 1.45}px`,
+                background: piece.color,
+                animation: `mockj-confetti-burst ${piece.duration}s cubic-bezier(.16,.8,.28,1) ${piece.delay}s forwards`,
+                ['--tx' as string]: `${piece.tx}px`,
+                ['--rot' as string]: `${piece.rotate}deg`,
+              }}
+            />
+          ))}
+        </div>
+      )}
       <header className="sticky top-0 z-30 border-b border-border bg-[hsl(224_20%_5%_/_0.94)] backdrop-blur">
         <div className="mx-auto flex max-w-4xl items-center gap-3 px-4 py-3">
           <button
@@ -413,7 +502,7 @@ export default function TokensPage() {
         <section className="grid gap-4 lg:grid-cols-[1fr_320px]">
           <button
             type="button"
-            onClick={() => user ? toast.success('Daily streak checked. Come back tomorrow.') : requireAccount()}
+            onClick={handleDailyStreakClaim}
             className="flex items-center justify-between rounded-2xl border border-border bg-[hsl(224_15%_8%)] p-4 text-left transition hover:border-[hsl(38_95%_60%_/_0.42)]"
           >
             <span className="flex items-center gap-3">
