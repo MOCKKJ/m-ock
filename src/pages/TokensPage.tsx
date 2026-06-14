@@ -27,6 +27,7 @@ import {
   TokenCatalogItem,
   useTokenWallet,
 } from '@/hooks/useTokenWallet';
+import { postApi } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 
@@ -188,19 +189,11 @@ export default function TokensPage() {
 
   const handleTokenPackCheckout = async (pack: TokenPack) => {
     try {
-      const response = await fetch('/api/create-token-checkout', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          packId: pack.id,
-          email: user?.email,
-          userId: user?.id,
-        }),
+      const data = await postApi<{ url?: string }>('/api/create-token-checkout', {
+        packId: pack.id,
+        email: user?.email,
+        userId: user?.id,
       });
-      const data = await response.json().catch(() => null);
-      if (!response.ok) {
-        throw new Error(data?.error || `Stripe checkout failed with status ${response.status}`);
-      }
       if (!data?.url) {
         throw new Error('Stripe checkout did not return a redirect URL.');
       }
