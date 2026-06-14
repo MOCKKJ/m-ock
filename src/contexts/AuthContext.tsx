@@ -1,6 +1,6 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { User } from '@supabase/supabase-js';
-import { supabase } from '@/lib/supabase';
+import { isSupabaseConfigured, supabase } from '@/lib/supabase';
 import { postAuthedApi } from '@/lib/api';
 import { AuthUser, SubscriptionState } from '@/types/auth';
 
@@ -50,6 +50,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   const checkSubscription = async () => {
+    if (!isSupabaseConfigured) {
+      setSubscription(defaultSub);
+      return;
+    }
     const { data: { session } } = await supabase.auth.getSession();
     if (!session) {
       setSubscription(defaultSub);
@@ -81,7 +85,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const logout = async () => {
-    await supabase.auth.signOut();
+    if (isSupabaseConfigured) {
+      await supabase.auth.signOut();
+    }
     setUser(null);
     setSubscription(defaultSub);
   };
@@ -91,12 +97,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const refreshUser = async () => {
+    if (!isSupabaseConfigured) return;
     const { data: { user: supaUser } } = await supabase.auth.getUser();
     if (supaUser) setUser(mapSupabaseUser(supaUser));
   };
 
   useEffect(() => {
     let mounted = true;
+
+    if (!isSupabaseConfigured) {
+      setLoading(false);
+      return () => {
+        mounted = false;
+      };
+    }
 
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (mounted && session?.user) {
