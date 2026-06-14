@@ -40,6 +40,7 @@ function mapSupabaseUser(user: User): AuthUser {
       user.user_metadata?.full_name ||
       user.email!.split('@')[0],
     avatar: user.user_metadata?.avatar_url || user.user_metadata?.picture,
+    tokenWallet: user.user_metadata?.mockj_token_wallet,
   };
 }
 

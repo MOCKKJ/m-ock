@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
+import { supabase } from '@/lib/supabase';
 import type { AuthUser } from '@/types/auth';
 
 export type TokenAction = 'chat' | 'image' | 'video';
@@ -105,6 +106,12 @@ function saveStore(store: WalletStore) {
   localStorage.setItem(WALLET_KEY, JSON.stringify(store));
 }
 
+function saveWallet(owner: string, wallet: WalletRecord) {
+  const store = loadStore();
+  store[owner] = wallet;
+  saveStore(store);
+}
+
 function ensureWallet(owner: string): WalletRecord {
   const store = loadStore();
   if (store[owner]) return store[owner];
@@ -124,6 +131,26 @@ function creditWallet(owner: string, amount: number): WalletRecord {
   store[owner] = updated;
   saveStore(store);
   return updated;
+}
+
+function validCloudWallet(user?: AuthUser | null): WalletRecord | null {
+  const wallet = user?.tokenWallet;
+  if (!wallet || typeof wallet.balance !== 'number' || wallet.balance < 0) return null;
+  const now = new Date().toISOString();
+  return {
+    balance: Math.floor(wallet.balance),
+    createdAt: wallet.createdAt || now,
+    updatedAt: wallet.updatedAt || now,
+  };
+}
+
+async function persistWalletToAccount(wallet: WalletRecord) {
+  const { error } = await supabase.auth.updateUser({
+    data: {
+      mockj_token_wallet: wallet,
+    },
+  });
+  if (error) throw error;
 }
 
 function loadReferralStore(): ReferralStore {
@@ -230,8 +257,24 @@ export function useTokenWallet() {
   const [referralVersion, setReferralVersion] = useState(0);
 
   useEffect(() => {
-    setBalance(owner ? ensureWallet(owner).balance : 0);
-  }, [owner]);
+    if (!owner) {
+      setBalance(0);
+      return;
+    }
+
+    const cloudWallet = validCloudWallet(user);
+    if (cloudWallet) {
+      saveWallet(owner, cloudWallet);
+      setBalance(cloudWallet.balance);
+      return;
+    }
+
+    const localWallet = ensureWallet(owner);
+    setBalance(localWallet.balance);
+    void persistWalletToAccount(localWallet).catch(error => {
+      console.error('Failed to persist token wallet:', error);
+    });
+  }, [owner, user]);
 
   const canSpendTokens = useCallback(
     (action: TokenAction) => {
@@ -258,6 +301,9 @@ export function useTokenWallet() {
       store[owner] = updated;
       saveStore(store);
       setBalance(updated.balance);
+      void persistWalletToAccount(updated).catch(error => {
+        console.error('Failed to persist token spend:', error);
+      });
       return true;
     },
     [owner]
@@ -288,6 +334,9 @@ export function useTokenWallet() {
       store[owner] = updated;
       saveStore(store);
       setBalance(updated.balance);
+      void persistWalletToAccount(updated).catch(error => {
+        console.error('Failed to persist token spend:', error);
+      });
       return true;
     },
     [owner]
@@ -298,6 +347,9 @@ export function useTokenWallet() {
       if (!owner || amount <= 0) return false;
       const updated = creditWallet(owner, amount);
       setBalance(updated.balance);
+      void persistWalletToAccount(updated).catch(error => {
+        console.error('Failed to persist token credit:', error);
+      });
       return true;
     },
     [owner]

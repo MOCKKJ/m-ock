@@ -3,6 +3,11 @@ export interface AuthUser {
   email: string;
   username: string;
   avatar?: string;
+  tokenWallet?: {
+    balance: number;
+    createdAt?: string;
+    updatedAt?: string;
+  };
 }
 
 export interface SubscriptionState {

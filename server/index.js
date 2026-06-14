@@ -38,6 +38,14 @@ function stripeClient() {
   });
 }
 
+const TOKEN_PACKS = {
+  starter: { name: 'Starter Pack', tokens: 500, amount: 499 },
+  creator: { name: 'Creator Pack', tokens: 1500, amount: 999 },
+  pro: { name: 'Pro Pack', tokens: 5000, amount: 2499 },
+  elite: { name: 'Elite Pack', tokens: 12000, amount: 4999 },
+  titan: { name: 'Titan Pack', tokens: 30000, amount: 9999 },
+};
+
 function supabaseAdminClient() {
   const url = requiredEnv('SUPABASE_URL', ['VITE_SUPABASE_URL']);
   const key = requiredEnv('SUPABASE_SERVICE_ROLE_KEY', [
@@ -267,6 +275,51 @@ app.post('/api/create-checkout', async (req, res) => {
   } catch (error) {
     const status = error.statusCode || 500;
     res.status(status).json({ error: error.message || 'Failed to create checkout session' });
+  }
+});
+
+app.post('/api/create-token-checkout', async (req, res) => {
+  try {
+    const packId = String(req.body?.packId || '').toLowerCase();
+    const pack = TOKEN_PACKS[packId];
+    if (!pack) {
+      res.status(400).json({ error: 'Unknown token pack selected' });
+      return;
+    }
+
+    const stripe = stripeClient();
+    const origin = requestOrigin(req);
+    const session = await stripe.checkout.sessions.create({
+      mode: 'payment',
+      customer_email: typeof req.body?.email === 'string' ? req.body.email : undefined,
+      client_reference_id: typeof req.body?.userId === 'string' ? req.body.userId : undefined,
+      line_items: [
+        {
+          price_data: {
+            currency: 'usd',
+            unit_amount: pack.amount,
+            product_data: {
+              name: `${pack.tokens.toLocaleString()} MOCKJ Tokens`,
+              description: pack.name,
+            },
+          },
+          quantity: 1,
+        },
+      ],
+      metadata: {
+        type: 'token_pack',
+        pack_id: packId,
+        tokens: String(pack.tokens),
+        user_id: typeof req.body?.userId === 'string' ? req.body.userId : '',
+      },
+      success_url: `${origin}/tokens?tab=shop&checkout=success&pack=${packId}`,
+      cancel_url: `${origin}/tokens?tab=shop&checkout=cancelled`,
+    });
+
+    res.json({ url: session.url });
+  } catch (error) {
+    const status = error.statusCode || 500;
+    res.status(status).json({ error: error.message || 'Failed to create token checkout session' });
   }
 });
 

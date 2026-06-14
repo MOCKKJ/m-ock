@@ -31,6 +31,14 @@ import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 
 type TokenTab = 'overview' | 'shop' | 'earn' | 'referral' | 'history';
+type TokenPack = {
+  id: string;
+  name: string;
+  tokens: number;
+  price: number;
+  badge?: string;
+  features?: string[];
+};
 type ConfettiPiece = {
   id: number;
   left: number;
@@ -65,6 +73,41 @@ const CATEGORY_TONE: Record<TokenCatalogItem['category'], string> = {
 };
 
 const CONFETTI_COLORS = ['#ff3b30', '#ff9f0a', '#ffd60a', '#30d158', '#0a84ff', '#bf5af2'];
+
+const TOKEN_PACKS: TokenPack[] = [
+  { id: 'starter', name: 'Starter Pack', tokens: 500, price: 4.99 },
+  { id: 'creator', name: 'Creator Pack', tokens: 1500, price: 9.99, badge: 'Creator' },
+  {
+    id: 'pro',
+    name: 'Pro Pack',
+    tokens: 5000,
+    price: 24.99,
+    badge: 'Pro Creator',
+    features: ['Priority queue', 'HD generations'],
+  },
+  {
+    id: 'elite',
+    name: 'Elite Pack',
+    tokens: 12000,
+    price: 49.99,
+    badge: 'Elite',
+    features: ['Priority generation', 'Premium styles', 'Exclusive models'],
+  },
+  {
+    id: 'titan',
+    name: 'Titan Pack',
+    tokens: 30000,
+    price: 99.99,
+    badge: 'Titan',
+    features: ['Fastest queue', 'VIP support', 'Early feature access'],
+  },
+];
+
+const SUBSCRIPTION_PACKS = [
+  { name: 'MockJ Plus', tokens: 5000, price: 14.99 },
+  { name: 'MockJ Pro Sub', tokens: 15000, price: 29.99 },
+  { name: 'MockJ Unlimited', tokens: 50000, price: 79.99 },
+];
 
 export default function TokensPage() {
   const navigate = useNavigate();
@@ -140,6 +183,30 @@ export default function TokensPage() {
 
     if (spendCatalogItem(selected.id)) {
       toast.success(`${selected.cost} MLTX tokens used for ${selected.shortLabel}.`);
+    }
+  };
+
+  const handleTokenPackCheckout = async (pack: TokenPack) => {
+    try {
+      const response = await fetch('/api/create-token-checkout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          packId: pack.id,
+          email: user?.email,
+          userId: user?.id,
+        }),
+      });
+      const data = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error(data?.error || `Stripe checkout failed with status ${response.status}`);
+      }
+      if (!data?.url) {
+        throw new Error('Stripe checkout did not return a redirect URL.');
+      }
+      window.location.assign(data.url);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Failed to start Stripe checkout.');
     }
   };
 
@@ -382,6 +449,75 @@ export default function TokensPage() {
           </div>
         </section>
 
+        {activeTab === 'shop' && (
+          <section className="space-y-6">
+            <div>
+              <h2 className="text-base font-black text-foreground">One-Time Packs</h2>
+              <p className="mt-1 text-xs text-muted-foreground">Buy tokens once, use forever</p>
+              <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                {TOKEN_PACKS.map(pack => (
+                  <div
+                    key={pack.id}
+                    className="relative rounded-2xl border border-[hsl(38_95%_60%_/_0.24)] bg-[hsl(224_15%_8%)] p-5 shadow-[0_0_22px_hsl(38_95%_60%_/_0.04)]"
+                  >
+                    {pack.badge && (
+                      <span className="absolute -right-2 -top-2 rounded-full bg-[hsl(38_95%_60%)] px-3 py-1 text-[10px] font-black text-[hsl(224_20%_6%)]">
+                        {pack.badge}
+                      </span>
+                    )}
+                    <div className="flex items-start justify-between gap-4">
+                      <div>
+                        <p className="text-[11px] font-black uppercase tracking-widest text-muted-foreground">{pack.name}</p>
+                        <p className="mt-2 text-3xl font-black text-[hsl(38_95%_60%)]" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>
+                          {pack.tokens.toLocaleString()}{' '}
+                          <span className="text-xs font-medium text-muted-foreground">tokens</span>
+                        </p>
+                        <p className="mt-1 text-[10px] text-muted-foreground">
+                          ~= ${(pack.price / pack.tokens * 100).toFixed(2)} per token
+                        </p>
+                      </div>
+                      <p className="text-2xl font-black text-foreground">${pack.price.toFixed(2)}</p>
+                    </div>
+                    {pack.features && (
+                      <div className="mt-4 space-y-2">
+                        {pack.features.map(feature => (
+                          <p key={feature} className="text-xs text-muted-foreground">
+                            <CheckCircle2 className="mr-2 inline h-3 w-3 text-[hsl(142_70%_55%)]" />
+                            {feature}
+                          </p>
+                        ))}
+                      </div>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => handleTokenPackCheckout(pack)}
+                      className="mt-5 flex w-full items-center justify-center gap-2 rounded-xl bg-[hsl(38_95%_60%)] px-4 py-2.5 text-sm font-black text-[hsl(224_20%_6%)] transition hover:bg-[hsl(38_95%_68%)] focus:outline-none focus:ring-2 focus:ring-[hsl(38_95%_60%_/_0.45)]"
+                    >
+                      <Zap className="h-4 w-4" />
+                      Buy Now
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <h2 className="text-base font-black text-foreground">Monthly Subscriptions</h2>
+              <p className="mt-1 text-xs text-muted-foreground">Tokens delivered monthly, cancel anytime</p>
+              <div className="mt-4 grid gap-3 sm:grid-cols-3">
+                {SUBSCRIPTION_PACKS.map(pack => (
+                  <div key={pack.name} className="rounded-2xl border border-border bg-[hsl(224_15%_8%)] p-4">
+                    <p className="text-[11px] font-black uppercase tracking-widest text-muted-foreground">{pack.name}</p>
+                    <p className="mt-2 text-2xl font-black text-[hsl(38_95%_60%)]">{pack.tokens.toLocaleString()}</p>
+                    <p className="text-xs text-muted-foreground">tokens / month</p>
+                    <p className="mt-3 text-lg font-black text-foreground">${pack.price.toFixed(2)}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </section>
+        )}
+
         {activeTab === 'referral' && (
           <section className="space-y-4">
             <div className="rounded-2xl border border-[hsl(265_80%_65%_/_0.36)] bg-[hsl(265_80%_65%_/_0.08)] p-4">
@@ -483,7 +619,7 @@ export default function TokensPage() {
           </section>
         )}
 
-        {activeTab !== 'overview' && activeTab !== 'referral' && (
+        {activeTab !== 'overview' && activeTab !== 'shop' && activeTab !== 'referral' && (
           <section className="rounded-2xl border border-border bg-[hsl(224_15%_8%)] p-4">
             <div className="flex items-start gap-3">
               <ShoppingBag className="mt-0.5 h-4 w-4 text-[hsl(38_95%_60%)]" />
