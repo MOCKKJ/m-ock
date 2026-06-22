@@ -1,14 +1,22 @@
-User-agent: Googlebot
-Allow: /
-
-User-agent: Bingbot
-Allow: /
-
-User-agent: Twitterbot
-Allow: /
-
-User-agent: facebookexternalhit
-Allow: /
-
 User-agent: *
 Allow: /
+
+# Block admin and private routes from indexing
+Disallow: /admin/
+Disallow: /admin/analytics
+Disallow: /admin/dashboard
+Disallow: /admin/mint
+Disallow: /qa
+Disallow: /auth
+Disallow: /account
+Disallow: /success
+Disallow: /tokens
+Disallow: /meta-preview
+Disallow: /leaderboard
+
+# Allow all public-facing pages
+Allow: /
+Allow: /universe
+
+# Sitemaps
+Sitemap: https://mockk.online/sitemap.xml

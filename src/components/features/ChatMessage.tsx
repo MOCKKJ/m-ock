@@ -1,414 +1,502 @@
-import { useState, useCallback, useEffect, useRef } from 'react';
-import { Copy, Check, User, Play, ChevronDown, BrainCircuit, Volume2, VolumeX, Loader2 } from 'lucide-react';
+/**
+ * ChatMessage.tsx
+ * Renders a single chat message with markdown, code highlighting,
+ * emoji reactions, sound effects, and export support.
+ */
+
+import { useState, useRef, useEffect, useCallback } from 'react';
+import { Copy, Check, Download, ChevronDown, ChevronUp, ExternalLink } from 'lucide-react';
 import { Message } from '@/types/chat';
 import { cn } from '@/lib/utils';
-import { useTTS } from '@/hooks/useTTS';
-import { getAutoSpeak } from '@/hooks/useAutoSpeak';
-import logoImg from '@/assets/mockj-logo.png';
+import { toast } from 'sonner';
 
-// ─── Reaction persistence ────────────────────────────────────────────────────
-const REACTIONS_KEY = 'mocka-reactions';
+// ── Reaction system ──────────────────────────────────────────────────────────
+type ReactionEmoji = '🔥' | '💯' | '🧠' | '💀' | '❤️';
+const REACTIONS: ReactionEmoji[] = ['🔥', '💯', '🧠', '💀', '❤️'];
+const STORAGE_KEY = 'mockj_reactions';
 
-type ReactionEmoji = '👍' | '💡' | '🔁' | '❤️';
-const REACTION_EMOJIS: ReactionEmoji[] = ['👍', '💡', '🔁', '❤️'];
+type ReactionCounts = Partial<Record<ReactionEmoji, number>>;
+type ReactionStore = Record<string, ReactionCounts>;
 
-function loadAllReactions(): Record<string, ReactionEmoji[]> {
+function getMessageReactions(msgId: string): { counts: ReactionCounts; mine: ReactionEmoji | null } {
   try {
-    return JSON.parse(localStorage.getItem(REACTIONS_KEY) ?? '{}');
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return { counts: {}, mine: null };
+    const all: ReactionStore = JSON.parse(raw);
+    const mineKey = `${STORAGE_KEY}_mine`;
+    const mineRaw = localStorage.getItem(mineKey);
+    const mineAll: Record<string, ReactionEmoji> = mineRaw ? JSON.parse(mineRaw) : {};
+    return { counts: all[msgId] ?? {}, mine: mineAll[msgId] ?? null };
   } catch {
-    return {};
+    return { counts: {}, mine: null };
   }
 }
 
-function saveAllReactions(data: Record<string, ReactionEmoji[]>) {
-  localStorage.setItem(REACTIONS_KEY, JSON.stringify(data));
+function toggleReaction(msgId: string, emoji: ReactionEmoji): { counts: ReactionCounts; mine: ReactionEmoji | null } {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    const all: ReactionStore = raw ? JSON.parse(raw) : {};
+    const mineKey = `${STORAGE_KEY}_mine`;
+    const mineRaw = localStorage.getItem(mineKey);
+    const mineAll: Record<string, ReactionEmoji> = mineRaw ? JSON.parse(mineRaw) : {};
+
+    const counts: ReactionCounts = { ...(all[msgId] ?? {}) };
+    const current = mineAll[msgId];
+
+    if (current === emoji) {
+      // Remove reaction
+      counts[emoji] = Math.max(0, (counts[emoji] ?? 1) - 1);
+      if (!counts[emoji]) delete counts[emoji];
+      delete mineAll[msgId];
+    } else {
+      // Switch or add reaction
+      if (current) {
+        counts[current] = Math.max(0, (counts[current] ?? 1) - 1);
+        if (!counts[current]) delete counts[current];
+      }
+      counts[emoji] = (counts[emoji] ?? 0) + 1;
+      mineAll[msgId] = emoji;
+    }
+
+    all[msgId] = counts;
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(all));
+    localStorage.setItem(mineKey, JSON.stringify(mineAll));
+    return { counts, mine: mineAll[msgId] ?? null };
+  } catch {
+    return { counts: {}, mine: null };
+  }
 }
 
-function getMessageReactions(msgId: string): ReactionEmoji[] {
-  return loadAllReactions()[msgId] ?? [];
+// ── Sound effects ─────────────────────────────────────────────────────────────
+function playSoundEffect(type: 'copy' | 'reaction' | 'send') {
+  try {
+    const soundEnabled = localStorage.getItem('mockj_sound_enabled') !== 'false';
+    if (!soundEnabled) return;
+    const ctx = new AudioContext();
+    const oscillator = ctx.createOscillator();
+    const gainNode = ctx.createGain();
+    oscillator.connect(gainNode);
+    gainNode.connect(ctx.destination);
+
+    if (type === 'copy') {
+      oscillator.frequency.setValueAtTime(880, ctx.currentTime);
+      oscillator.frequency.setValueAtTime(1100, ctx.currentTime + 0.05);
+      gainNode.gain.setValueAtTime(0.1, ctx.currentTime);
+      gainNode.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.15);
+      oscillator.start(ctx.currentTime);
+      oscillator.stop(ctx.currentTime + 0.15);
+    } else if (type === 'reaction') {
+      oscillator.type = 'sine';
+      oscillator.frequency.setValueAtTime(660, ctx.currentTime);
+      oscillator.frequency.setValueAtTime(880, ctx.currentTime + 0.08);
+      gainNode.gain.setValueAtTime(0.08, ctx.currentTime);
+      gainNode.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.2);
+      oscillator.start(ctx.currentTime);
+      oscillator.stop(ctx.currentTime + 0.2);
+    } else if (type === 'send') {
+      oscillator.type = 'sine';
+      oscillator.frequency.setValueAtTime(440, ctx.currentTime);
+      oscillator.frequency.setValueAtTime(550, ctx.currentTime + 0.06);
+      gainNode.gain.setValueAtTime(0.07, ctx.currentTime);
+      gainNode.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.18);
+      oscillator.start(ctx.currentTime);
+      oscillator.stop(ctx.currentTime + 0.18);
+    }
+  } catch {
+    // Audio context may not be available in all environments
+  }
 }
 
-function toggleReaction(msgId: string, emoji: ReactionEmoji): ReactionEmoji[] {
-  const all = loadAllReactions();
-  const current = all[msgId] ?? [];
-  const next = current.includes(emoji)
-    ? current.filter(e => e !== emoji)
-    : [...current, emoji];
-  saveAllReactions({ ...all, [msgId]: next });
-  return next;
+// ── Markdown renderer (minimal) ───────────────────────────────────────────────
+function renderMarkdown(text: string): string {
+  return text
+    // Code blocks
+    .replace(/```(\w+)?\n([\s\S]*?)```/g, (_, lang, code) => {
+      const escaped = code.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      return `<pre class="code-block" data-lang="${lang ?? 'code'}"><code>${escaped}</code></pre>`;
+    })
+    // Inline code
+    .replace(/`([^`]+)`/g, '<code class="inline-code">$1</code>')
+    // Bold
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    // Italic
+    .replace(/\*(.+?)\*/g, '<em>$1</em>')
+    // Headers
+    .replace(/^### (.+)$/gm, '<h3>$1</h3>')
+    .replace(/^## (.+)$/gm, '<h2>$1</h2>')
+    .replace(/^# (.+)$/gm, '<h1>$1</h1>')
+    // Bullet lists
+    .replace(/^[•\-\*] (.+)$/gm, '<li>$1</li>')
+    .replace(/(<li>[\s\S]+?<\/li>)/g, (match) => `<ul>${match}</ul>`)
+    // Numbered lists
+    .replace(/^\d+\. (.+)$/gm, '<li>$1</li>')
+    // Horizontal rule
+    .replace(/^---$/gm, '<hr />')
+    // Line breaks
+    .replace(/\n\n/g, '</p><p>')
+    .replace(/\n/g, '<br />')
+    // Wrap in paragraph
+    .replace(/^(?!<[hpuol])(.+)/, '<p>$1')
+    // Links
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
 }
 
+// Strip [VERIFY] block from display text
+function stripVerifyBlock(content: string): { text: string; sources: { label: string; url: string }[] } {
+  const verifyMatch = content.match(/\[VERIFY\](\{.*?\})\s*$/s);
+  if (!verifyMatch) return { text: content, sources: [] };
+  try {
+    const parsed = JSON.parse(verifyMatch[1]);
+    const sources: { label: string; url: string }[] = parsed.sources ?? [];
+    const text = content.replace(/\[VERIFY\]\{.*?\}\s*$/s, '').trim();
+    return { text, sources };
+  } catch {
+    return { text: content.replace(/\[VERIFY\].*$/s, '').trim(), sources: [] };
+  }
+}
+
+// ── Colors ────────────────────────────────────────────────────────────────────
+const GREEN = 'hsl(142 70% 55%)';
+const RED   = 'hsl(4 90% 58%)';
+
+// ── Read receipt tick mark ────────────────────────────────────────────────────
+function ReadTick({ state }: { state: 'sent' | 'delivered' | 'read' }) {
+  return (
+    <span className="inline-flex items-center gap-[1px] ml-1" title={state}>
+      {/* First tick */}
+      <svg width="11" height="8" viewBox="0 0 11 8" fill="none">
+        <path
+          d="M1 4L3.5 6.5L9.5 1"
+          stroke={state === 'read' ? GREEN : 'rgba(160,180,220,0.4)'}
+          strokeWidth="1.6"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+      {/* Second tick — only for delivered/read */}
+      {(state === 'delivered' || state === 'read') && (
+        <svg width="11" height="8" viewBox="0 0 11 8" fill="none" style={{ marginLeft: -5 }}>
+          <path
+            d="M1 4L3.5 6.5L9.5 1"
+            stroke={state === 'read' ? GREEN : 'rgba(160,180,220,0.4)'}
+            strokeWidth="1.6"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
+      )}
+    </span>
+  );
+}
+
+// ── Props ─────────────────────────────────────────────────────────────────────
 interface ChatMessageProps {
   message: Message;
+  isLast?: boolean;
+  onReact?: (msgId: string, emoji: string) => void;
+  // tick state: 'sent' | 'delivered' | 'read'. Delivered when AI starts typing, read when AI responds
+  tickState?: 'sent' | 'delivered' | 'read';
 }
 
-// ─── Parse reasoning tags ────────────────────────────────────────────────────
-interface ParsedContent {
-  reasoning: string | null;
-  answer: string;
-  reasoningPartial: boolean; // still streaming inside <reasoning>
-}
-
-function parseReasoningContent(raw: string): ParsedContent {
-  const openTag = '<reasoning>';
-  const closeTag = '</reasoning>';
-  const openIdx = raw.indexOf(openTag);
-  if (openIdx === -1) return { reasoning: null, answer: raw, reasoningPartial: false };
-
-  const closeIdx = raw.indexOf(closeTag);
-  if (closeIdx === -1) {
-    // Reasoning block still streaming
-    const reasoning = raw.slice(openIdx + openTag.length);
-    return { reasoning, answer: '', reasoningPartial: true };
-  }
-
-  const reasoning = raw.slice(openIdx + openTag.length, closeIdx).trim();
-  const answer = raw.slice(closeIdx + closeTag.length).trim();
-  return { reasoning, answer, reasoningPartial: false };
-}
-
-function formatContent(text: string): React.ReactNode {
-  const lines = text.split('\n');
-  const elements: React.ReactNode[] = [];
-  let i = 0;
-
-  while (i < lines.length) {
-    const line = lines[i];
-
-    // Code block
-    if (line.startsWith('```')) {
-      const codeLines: string[] = [];
-      i++;
-      while (i < lines.length && !lines[i].startsWith('```')) {
-        codeLines.push(lines[i]);
-        i++;
-      }
-      elements.push(
-        <pre key={i} className="bg-[hsl(224_20%_4%)] border border-border rounded-lg p-3 my-2 overflow-x-auto text-xs text-[hsl(4_90%_78%)] font-mono">
-          <code>{codeLines.join('\n')}</code>
-        </pre>
-      );
-    }
-    // Bold heading **text**
-    else if (line.startsWith('**') && line.endsWith('**') && line.length > 4) {
-      elements.push(
-        <p key={i} className="font-semibold text-foreground mt-3 mb-1">
-          {line.slice(2, -2)}
-        </p>
-      );
-    }
-    // List item
-    else if (line.startsWith('• ') || line.startsWith('- ') || /^\d+\.\s/.test(line)) {
-      elements.push(
-        <div key={i} className="flex items-start gap-2 my-0.5 text-[hsl(210_20%_85%)]">
-          <span className="text-[hsl(4_90%_58%)] mt-0.5 shrink-0">
-            {line.startsWith('• ') || line.startsWith('- ') ? '·' : line.match(/^\d+/)?.[0] + '.'}
-          </span>
-          <span>{line.replace(/^[•\-]\s|^\d+\.\s/, '').replace(/\*\*(.*?)\*\*/g, '$1')}</span>
-        </div>
-      );
-    }
-    // Empty line
-    else if (line.trim() === '') {
-      elements.push(<div key={i} className="h-1" />);
-    }
-    // Normal text with inline bold
-    else {
-      const parts = line.split(/\*\*(.*?)\*\*/g);
-      elements.push(
-        <p key={i} className="leading-relaxed text-[hsl(210_20%_85%)]">
-          {parts.map((part, pi) =>
-            pi % 2 === 1 ? <strong key={pi} className="text-foreground font-semibold">{part}</strong> : part
-          )}
-        </p>
-      );
-    }
-    i++;
-  }
-
-  return <div className="space-y-0.5">{elements}</div>;
-}
-
-export default function ChatMessage({ message }: ChatMessageProps) {
-  const [copied, setCopied] = useState(false);
-  const [activeReactions, setActiveReactions] = useState<ReactionEmoji[]>(
-    () => getMessageReactions(message.id)
-  );
-  const [reasoningExpanded, setReasoningExpanded] = useState(true);
+// ── Component ─────────────────────────────────────────────────────────────────
+export default function ChatMessage({ message, isLast, tickState = 'sent' }: ChatMessageProps) {
   const isUser = message.role === 'user';
-  const { speak, stop, isPlaying, isLoading, playbackRate, setSpeed } = useTTS(message.id);
-  const autoSpokenRef = useRef(false);
+  const isStreaming = message.streaming ?? false;
 
-  // Auto-speak: trigger once when a new AI text message finishes streaming
+  // Reactions
+  const [reactionState, setReactionState] = useState(() => getMessageReactions(message.id));
+  const [showReactions, setShowReactions] = useState(false);
+  const reactionRef = useRef<HTMLDivElement>(null);
+
+  // Copy state
+  const [copied, setCopied] = useState(false);
+
+  // Collapse long messages
+  const [collapsed, setCollapsed] = useState(false);
+  const [isLong, setIsLong] = useState(false);
+  const contentRef = useRef<HTMLDivElement>(null);
+
   useEffect(() => {
-    if (
-      !isUser &&
-      message.type === 'text' &&
-      !message.streaming &&
-      !autoSpokenRef.current &&
-      message.content.trim().length > 0
-    ) {
-      autoSpokenRef.current = true;
-      if (getAutoSpeak()) {
-        const p = parseReasoningContent(message.content);
-        const text = (p.answer || message.content).trim();
-        if (text) speak(text);
-      }
+    if (contentRef.current && contentRef.current.scrollHeight > 600) {
+      setIsLong(true);
+      setCollapsed(true);
     }
-  }, [message.streaming, message.content, isUser, message.type, speak]);
+  }, [message.content]);
 
-  // Text content to speak — strip reasoning trace, use only the answer
-  const speakableText = !isUser && message.type === 'text'
-    ? (() => {
-        const p = parseReasoningContent(message.content);
-        return (p.answer || message.content).trim();
-      })()
-    : null;
+  // Close reaction picker on outside click
+  useEffect(() => {
+    if (!showReactions) return;
+    const handler = (e: MouseEvent) => {
+      if (reactionRef.current && !reactionRef.current.contains(e.target as Node)) {
+        setShowReactions(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [showReactions]);
 
-  const parsed = !isUser && message.type === 'text'
-    ? parseReasoningContent(message.content)
-    : null;
-
-  const handleReaction = useCallback((emoji: ReactionEmoji) => {
-    const next = toggleReaction(message.id, emoji);
-    setActiveReactions(next);
-  }, [message.id]);
-
-  const handleCopy = () => {
+  const handleCopy = useCallback(() => {
     navigator.clipboard.writeText(message.content);
     setCopied(true);
+    playSoundEffect('copy');
+    toast.success('Copied to clipboard');
     setTimeout(() => setCopied(false), 2000);
-  };
+  }, [message.content]);
+
+  const handleReact = useCallback((emoji: ReactionEmoji) => {
+    const next = toggleReaction(message.id, emoji);
+    setReactionState(next);
+    playSoundEffect('reaction');
+    setShowReactions(false);
+  }, [message.id]);
+
+  const handleExport = useCallback(() => {
+    const blob = new Blob([message.content], { type: 'text/markdown' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `mockj-response-${Date.now()}.md`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast.success('Exported as Markdown');
+  }, [message.content]);
+
+  // Parse verify sources + display text
+  const { text: displayText, sources } = stripVerifyBlock(message.content);
+
+  // Render content based on message type
+  if (message.type === 'image' && message.mediaUrl) {
+    return (
+      <div className={cn('flex gap-3 px-4 py-3', isUser ? 'justify-end' : 'justify-start')}>
+        <div className="max-w-sm">
+          <img
+            src={message.mediaUrl}
+            alt={message.mediaPrompt ?? 'Generated image'}
+            className="rounded-2xl border border-white/10 max-w-full shadow-lg"
+            style={{ maxHeight: '400px', objectFit: 'cover' }}
+          />
+          {message.mediaPrompt && (
+            <p className="text-xs mt-1.5 px-1" style={{ color: 'rgba(160,180,220,0.5)' }}>
+              "{message.mediaPrompt}"
+            </p>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  if (message.type === 'video' && message.mediaUrl) {
+    return (
+      <div className={cn('flex gap-3 px-4 py-3', isUser ? 'justify-end' : 'justify-start')}>
+        <div className="max-w-sm">
+          <video
+            src={message.mediaUrl}
+            controls
+            className="rounded-2xl border border-white/10 max-w-full shadow-lg"
+            style={{ maxHeight: '360px' }}
+          />
+          {message.mediaPrompt && (
+            <p className="text-xs mt-1.5 px-1" style={{ color: 'rgba(160,180,220,0.5)' }}>
+              "{message.mediaPrompt}"
+            </p>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div className={cn('flex items-end gap-3 animate-message-in', isUser && 'flex-row-reverse')}>
-      {/* Avatar */}
-      <div className={cn(
-        'w-7 h-7 rounded-full shrink-0 flex items-center justify-center overflow-hidden relative',
-        isUser
-          ? 'bg-[hsl(265_80%_65%_/_0.2)] ring-1 ring-[hsl(265_80%_65%_/_0.4)]'
-          : 'ring-1 ring-[hsl(4_90%_58%_/_0.4)]'
-      )}>
-        {isUser
-          ? (message.userAvatar
-              ? <img src={message.userAvatar} alt="You" className="w-full h-full object-cover" />
-              : <User className="w-4 h-4 text-[hsl(265_80%_65%)]" />)
-          : isPlaying
-          ? (
-            <div className="w-full h-full bg-[hsl(4_90%_58%_/_0.12)] flex items-end justify-center gap-[2px] pb-1 pt-1">
-              <span className="waveform-bar" />
-              <span className="waveform-bar" />
-              <span className="waveform-bar" />
-              <span className="waveform-bar" />
-              <span className="waveform-bar" />
+    <div
+      className={cn(
+        'group flex gap-3 px-4 py-2 transition-all duration-200',
+        isUser ? 'justify-end' : 'justify-start',
+        isLast && !isStreaming && 'animate-fade-in'
+      )}
+    >
+      {/* Avatar — AI only */}
+      {!isUser && (
+        <div className="shrink-0 w-7 h-7 rounded-xl overflow-hidden mt-1"
+          style={{ border: `1.5px solid ${GREEN}66`, boxShadow: `0 0 10px ${GREEN}33` }}>
+          <img src="/mockj-icon.png" alt="MockJ" className="w-full h-full object-cover object-top" />
+        </div>
+      )}
+
+      <div className={cn('flex flex-col max-w-[85%] lg:max-w-[75%]', isUser ? 'items-end' : 'items-start')}>
+
+        {/* Bubble */}
+        <div
+          className="relative rounded-2xl px-4 py-3 text-sm leading-relaxed"
+          style={isUser ? {
+            background: `linear-gradient(135deg, hsl(142 70% 22%), hsl(142 70% 16%))`,
+            border: `1px solid ${GREEN}44`,
+            color: '#e8f5ec',
+            borderBottomRightRadius: '6px',
+          } : {
+            background: 'rgba(10, 18, 12, 0.85)',
+            border: '1px solid rgba(255,255,255,0.07)',
+            color: 'rgba(220, 235, 225, 0.92)',
+            borderBottomLeftRadius: '6px',
+          }}
+        >
+          {/* User avatar (right side) */}
+          {isUser && message.userAvatar && (
+            <div className="absolute -top-2 -right-2 w-6 h-6 rounded-full overflow-hidden border border-white/20">
+              <img src={message.userAvatar} alt="You" className="w-full h-full object-cover" />
             </div>
-          )
-          : <img src={logoImg} alt="MockJ" className="w-full h-full object-cover" />
-        }
-      </div>
+          )}
 
-      {/* Bubble */}
-      <div className={cn('group max-w-[75%] flex flex-col gap-1', isUser && 'items-end')}>
-        {/* Image message */}
-        {message.type === 'image' && message.mediaUrl && (
-          <div className="rounded-2xl overflow-hidden border border-border">
-            <img
-              src={message.mediaUrl}
-              alt={message.mediaPrompt || 'Generated image'}
-              className="max-w-sm w-full object-cover"
-              loading="lazy"
-            />
-            {message.mediaPrompt && (
-              <div className="px-3 py-2 bg-[hsl(224_15%_10%)] text-xs text-muted-foreground">
-                "{message.mediaPrompt}"
-              </div>
+          {/* Content */}
+          <div
+            ref={contentRef}
+            className={cn(
+              'prose-sm max-w-none overflow-hidden transition-all duration-300',
+              collapsed && isLong ? 'max-h-72' : ''
             )}
+            style={{ maskImage: collapsed && isLong ? 'linear-gradient(to bottom, black 60%, transparent 100%)' : 'none' }}
+          >
+            {isStreaming ? (
+              <div className="whitespace-pre-wrap break-words">
+                {displayText}
+                <span className="inline-block w-1.5 h-4 ml-0.5 rounded-sm animate-pulse" style={{ background: GREEN, verticalAlign: 'text-bottom' }} />
+              </div>
+            ) : (
+              <div
+                className="chat-markdown whitespace-pre-wrap break-words"
+                dangerouslySetInnerHTML={{ __html: renderMarkdown(displayText) }}
+              />
+            )}
+          </div>
+
+          {/* Collapse toggle */}
+          {isLong && !isStreaming && (
+            <button
+              onClick={() => setCollapsed(v => !v)}
+              className="mt-2 flex items-center gap-1 text-xs font-semibold transition-colors"
+              style={{ color: GREEN }}
+            >
+              {collapsed ? <><ChevronDown className="w-3 h-3" /> Show more</> : <><ChevronUp className="w-3 h-3" /> Show less</>}
+            </button>
+          )}
+        </div>
+
+        {/* Verify sources */}
+        {sources.length > 0 && !isStreaming && (
+          <div className="mt-1.5 flex flex-wrap gap-1.5">
+            {sources.map(s => (
+              <a
+                key={s.url}
+                href={s.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-semibold transition-colors hover:opacity-80"
+                style={{ background: 'rgba(100,120,200,0.1)', border: '1px solid rgba(100,120,200,0.2)', color: 'rgba(160,180,240,0.75)' }}
+              >
+                <ExternalLink className="w-2.5 h-2.5" />
+                {s.label}
+              </a>
+            ))}
           </div>
         )}
 
-        {/* Video message */}
-        {message.type === 'video' && message.mediaUrl && (
-          <div className="rounded-2xl overflow-hidden border border-border relative group/video max-w-sm w-full">
-            <img
-              src={message.mediaUrl}
-              alt="Video thumbnail"
-              className="w-full object-cover"
-              loading="lazy"
-            />
-            <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
-              <div className="w-14 h-14 rounded-full bg-[hsl(191_97%_55%_/_0.9)] flex items-center justify-center glow-cyan">
-                <Play className="w-6 h-6 text-[hsl(224_20%_6%)] ml-1" />
-              </div>
-            </div>
-            {message.mediaPrompt && (
-              <div className="px-3 py-2 bg-[hsl(224_15%_10%)] text-xs text-muted-foreground">
-                {message.content}
-              </div>
-            )}
+        {/* Reaction counts */}
+        {Object.keys(reactionState.counts).length > 0 && (
+          <div className="flex flex-wrap gap-1 mt-1">
+            {REACTIONS.filter(e => (reactionState.counts[e] ?? 0) > 0).map(e => (
+              <button
+                key={e}
+                onClick={() => handleReact(e)}
+                className="flex items-center gap-1 px-2 py-0.5 rounded-full text-xs transition-all"
+                style={{
+                  background: reactionState.mine === e ? `${GREEN}22` : 'rgba(255,255,255,0.06)',
+                  border: `1px solid ${reactionState.mine === e ? `${GREEN}66` : 'rgba(255,255,255,0.1)'}`,
+                }}
+              >
+                <span>{e}</span>
+                <span className="text-[10px] font-bold" style={{ color: reactionState.mine === e ? GREEN : 'rgba(160,180,220,0.6)' }}>
+                  {reactionState.counts[e]}
+                </span>
+              </button>
+            ))}
           </div>
         )}
 
-        {/* Text message */}
-        {(message.type === 'text' || (message.type !== 'image' && message.type !== 'video') || !message.mediaUrl) && (
-          <div className="flex flex-col gap-2 max-w-full">
-            {/* Reasoning trace block */}
-            {parsed?.reasoning != null && (
-              <div className="rounded-xl border border-[hsl(38_95%_60%_/_0.3)] bg-[hsl(38_95%_60%_/_0.05)] overflow-hidden">
-                <button
-                  onClick={() => setReasoningExpanded(v => !v)}
-                  className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-[hsl(38_95%_60%_/_0.06)] transition-colors duration-150"
+        {/* Action row */}
+        {!isUser && !isStreaming && (
+          <div className="flex items-center gap-1 mt-1 opacity-0 group-hover:opacity-100 transition-opacity duration-200" ref={reactionRef}>
+
+            {/* Emoji picker trigger */}
+            <div className="relative">
+              <button
+                onClick={() => setShowReactions(v => !v)}
+                className="w-7 h-7 flex items-center justify-center rounded-lg text-xs transition-all"
+                style={{ color: 'rgba(160,180,220,0.5)', background: showReactions ? 'rgba(255,255,255,0.08)' : 'transparent' }}
+                onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = 'rgba(255,255,255,0.07)'; }}
+                onMouseLeave={e => { if (!showReactions) (e.currentTarget as HTMLButtonElement).style.background = 'transparent'; }}
+                title="React"
+              >
+                😊
+              </button>
+              {showReactions && (
+                <div
+                  className="absolute bottom-8 left-0 flex gap-1 p-2 rounded-2xl z-20 shadow-2xl"
+                  style={{ background: 'hsl(224 20% 8%)', border: '1px solid rgba(255,255,255,0.1)', boxShadow: '0 8px 32px rgba(0,0,0,0.5)' }}
                 >
-                  <BrainCircuit className="w-3.5 h-3.5 text-[hsl(38_95%_60%)] shrink-0" />
-                  <span className="text-[11px] font-semibold text-[hsl(38_95%_60%)] flex-1">
-                    Reasoning trace
-                    {parsed.reasoningPartial && (
-                      <span className="ml-2 inline-block w-1.5 h-1.5 rounded-full bg-[hsl(38_95%_60%)] animate-pulse align-middle" />
-                    )}
-                  </span>
-                  <ChevronDown
-                    className={cn(
-                      'w-3.5 h-3.5 text-[hsl(38_95%_60%_/_0.7)] transition-transform duration-200 shrink-0',
-                      reasoningExpanded ? 'rotate-0' : '-rotate-90'
-                    )}
-                  />
-                </button>
-                {reasoningExpanded && (
-                  <div className="px-3 pb-3 border-t border-[hsl(38_95%_60%_/_0.15)]">
-                    <div className="pt-2 text-xs text-[hsl(38_95%_75%)] leading-relaxed font-mono whitespace-pre-wrap opacity-90">
-                      {parsed.reasoning}
-                      {parsed.reasoningPartial && (
-                        <span className="inline-block w-0.5 h-3.5 bg-[hsl(38_95%_60%)] ml-0.5 animate-pulse rounded-full" />
-                      )}
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* Main answer bubble */}
-            {(parsed ? parsed.answer || (!parsed.reasoningPartial && !parsed.answer) : true) && (
-              <div className={cn(
-                'rounded-2xl px-4 py-3 text-sm leading-relaxed',
-                isUser
-                  ? 'bg-[hsl(265_80%_65%_/_0.15)] border border-[hsl(265_80%_65%_/_0.25)] text-foreground rounded-br-sm'
-                  : 'bg-[hsl(224_15%_14%)] border border-border rounded-bl-sm'
-              )}>
-                {isUser ? (
-                  <p className="leading-relaxed">{message.content}</p>
-                ) : message.streaming && !(parsed ? parsed.answer : message.content) ? (
-                  <div className="flex items-center gap-1.5 py-0.5">
-                    <span className="w-1.5 h-4 bg-[hsl(4_90%_58%)] rounded-full animate-pulse" />
-                  </div>
-                ) : (
-                  <>
-                    {formatContent(parsed ? parsed.answer : message.content)}
-                    {message.streaming && !parsed?.reasoningPartial && (
-                      <span className="inline-block w-0.5 h-4 bg-[hsl(4_90%_58%)] ml-0.5 animate-pulse rounded-full" />
-                    )}
-                  </>
-                )}
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Actions row */}
-        <div className={cn(
-          'flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity duration-150',
-          isUser && 'flex-row-reverse'
-        )}>
-          <span className="text-[10px] text-muted-foreground opacity-60">
-            {message.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-          </span>
-          {!isUser && message.type === 'text' && !message.streaming && (
-            <>
-              {/* Speak / Stop button */}
-              {speakableText && (
-                <button
-                  onClick={() => isPlaying ? stop() : speak(speakableText)}
-                  disabled={isLoading}
-                  title={isPlaying ? 'Stop speaking' : isLoading ? 'Loading audio…' : 'Read aloud'}
-                  className={cn(
-                    'flex items-center gap-1 text-[10px] transition-colors px-1.5 py-0.5 rounded',
-                    isPlaying
-                      ? 'text-[hsl(4_90%_58%)] bg-[hsl(4_90%_58%_/_0.1)] hover:bg-[hsl(4_90%_58%_/_0.18)]'
-                      : isLoading
-                      ? 'text-muted-foreground cursor-wait'
-                      : 'text-muted-foreground hover:text-foreground hover:bg-[hsl(224_15%_16%)]'
-                  )}
-                >
-                  {isLoading
-                    ? <Loader2 className="w-3 h-3 animate-spin" />
-                    : isPlaying
-                    ? <VolumeX className="w-3 h-3" />
-                    : <Volume2 className="w-3 h-3" />
-                  }
-                  {isLoading ? 'Loading…' : isPlaying ? 'Stop' : 'Speak'}
-                </button>
-              )}
-              {/* Playback speed selector — visible while playing */}
-              {isPlaying && (
-                <div className="flex items-center gap-0.5 rounded-lg border border-[hsl(4_90%_58%_/_0.25)] bg-[hsl(224_15%_8%)] overflow-hidden">
-                  {([0.75, 1, 1.25, 1.5] as const).map(rate => (
+                  {REACTIONS.map(e => (
                     <button
-                      key={rate}
-                      onClick={() => setSpeed(rate)}
-                      title={`${rate}× speed`}
-                      className={cn(
-                        'px-1.5 py-0.5 text-[10px] font-semibold transition-all duration-150',
-                        playbackRate === rate
-                          ? 'bg-[hsl(4_90%_58%)] text-white'
-                          : 'text-muted-foreground hover:text-[hsl(4_90%_58%)] hover:bg-[hsl(4_90%_58%_/_0.08)]'
-                      )}
+                      key={e}
+                      onClick={() => handleReact(e)}
+                      className="w-8 h-8 flex items-center justify-center rounded-xl text-base transition-all hover:scale-125"
+                      style={{ background: reactionState.mine === e ? `${GREEN}20` : 'transparent' }}
+                      title={e}
                     >
-                      {rate}×
+                      {e}
                     </button>
                   ))}
                 </div>
               )}
-              <button
-                onClick={handleCopy}
-                className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors px-1.5 py-0.5 rounded hover:bg-[hsl(224_15%_16%)]"
-              >
-                {copied ? <Check className="w-3 h-3 text-[hsl(4_90%_58%)]" /> : <Copy className="w-3 h-3" />}
-                {copied ? 'Copied' : 'Copy'}
-              </button>
-            </>
-          )}
-        </div>
+            </div>
 
-        {/* Emoji Reactions — AI messages only */}
-        {!isUser && !message.streaming && (
-          <div className={cn(
-            'flex items-center gap-1 mt-0.5',
-            'opacity-0 group-hover:opacity-100 transition-opacity duration-150'
-          )}>
-            {REACTION_EMOJIS.map(emoji => {
-              const active = activeReactions.includes(emoji);
-              return (
-                <button
-                  key={emoji}
-                  onClick={() => handleReaction(emoji)}
-                  title={active ? 'Remove reaction' : 'React'}
-                  className={cn(
-                    'h-6 px-1.5 rounded-lg text-xs border transition-all duration-150 select-none active:scale-90',
-                    active
-                      ? 'bg-[hsl(4_90%_58%_/_0.15)] border-[hsl(4_90%_58%_/_0.45)] shadow-[0_0_6px_hsl(4_90%_58%_/_0.2)]'
-                      : 'bg-[hsl(224_15%_11%)] border-border hover:border-[hsl(224_15%_28%)] hover:bg-[hsl(224_15%_15%)]'
-                  )}
-                >
-                  {emoji}
-                  {active && (
-                    <span className="ml-1 text-[10px] font-semibold text-[hsl(4_90%_58%)] leading-none">
-                      ✓
-                    </span>
-                  )}
-                </button>
-              );
-            })}
+            {/* Copy */}
+            <button
+              onClick={handleCopy}
+              className="w-7 h-7 flex items-center justify-center rounded-lg transition-all"
+              style={{ color: copied ? GREEN : 'rgba(160,180,220,0.5)' }}
+              onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = 'rgba(255,255,255,0.07)'; }}
+              onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = 'transparent'; }}
+              title="Copy"
+            >
+              {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+            </button>
+
+            {/* Export markdown */}
+            <button
+              onClick={handleExport}
+              className="w-7 h-7 flex items-center justify-center rounded-lg transition-all"
+              style={{ color: 'rgba(160,180,220,0.5)' }}
+              onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = 'rgba(255,255,255,0.07)'; }}
+              onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = 'transparent'; }}
+              title="Export as Markdown"
+            >
+              <Download className="w-3.5 h-3.5" />
+            </button>
+
           </div>
         )}
+
+        {/* Timestamp + read tick */}
+        <span className="flex items-center gap-0.5 text-[10px] mt-1 px-1 opacity-0 group-hover:opacity-100 transition-opacity" style={{ color: 'rgba(120,140,160,0.5)' }}>
+          {new Date(message.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+          {isUser && !message.streaming && <ReadTick state={tickState} />}
+        </span>
       </div>
+
+      {/* Avatar — user only */}
+      {isUser && !message.userAvatar && (
+        <div className="shrink-0 w-7 h-7 rounded-xl flex items-center justify-center mt-1 text-xs font-black"
+          style={{ background: `linear-gradient(135deg, ${RED}, hsl(20 90% 55%))`, color: '#fff', border: `1px solid ${RED}66` }}>
+          U
+        </div>
+      )}
     </div>
   );
 }

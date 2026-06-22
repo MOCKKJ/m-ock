@@ -1,0 +1,82 @@
+name: Daily Maintenance Scan
+
+on:
+  schedule:
+    # Every day at 3:00 AM UTC
+    - cron: '0 3 * * *'
+  # Allow manual trigger from GitHub Actions tab
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment'
+        required: false
+        default: 'production'
+        type: choice
+        options:
+          - production
+          - staging
+
+concurrency:
+  group: daily-maintenance-scan
+  cancel-in-progress: false
+
+jobs:
+  run-maintenance-scan:
+    name: Trigger Maintenance Scan (3am UTC)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Trigger auto-scan edge function
+        id: scan
+        run: |
+          RESPONSE=$(curl -s -w "\n%{http_code}" \
+            -X POST \
+            -H "Content-Type: application/json" \
+            -H "X-Auto-Scan-Secret: ${{ secrets.CRON_SECRET }}" \
+            "${{ secrets.SUPABASE_FUNCTIONS_URL }}/auto-scan")
+
+          HTTP_STATUS=$(echo "$RESPONSE" | tail -n1)
+          BODY=$(echo "$RESPONSE" | head -n -1)
+
+          echo "HTTP Status: $HTTP_STATUS"
+          echo "Response: $BODY"
+          echo "scan_response=$BODY" >> $GITHUB_OUTPUT
+          echo "http_status=$HTTP_STATUS" >> $GITHUB_OUTPUT
+
+          if [ "$HTTP_STATUS" -ne 200 ]; then
+            echo "❌ Scan failed with HTTP $HTTP_STATUS"
+            exit 1
+          fi
+
+          echo "✅ Scan completed"
+
+      - name: Parse scan result
+        run: |
+          RISK=$(echo '${{ steps.scan.outputs.scan_response }}' | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('risk_level','unknown'))")
+          FAILED=$(echo '${{ steps.scan.outputs.scan_response }}' | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('failed',0))")
+          TOTAL=$(echo '${{ steps.scan.outputs.scan_response }}' | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('total_checks',0))")
+          ALERT=$(echo '${{ steps.scan.outputs.scan_response }}' | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('alert_dispatched',False))")
+
+          echo "## 🔍 Daily Maintenance Scan Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Risk Level | **${RISK^^}** |" >> $GITHUB_STEP_SUMMARY
+          echo "| Total Checks | $TOTAL |" >> $GITHUB_STEP_SUMMARY
+          echo "| Failed Checks | $FAILED |" >> $GITHUB_STEP_SUMMARY
+          echo "| Alert Sent | $ALERT |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "[View Full Report](https://mockj.ai/admin/maintenance)" >> $GITHUB_STEP_SUMMARY
+
+          # Fail the workflow step (not the job) if risk is critical
+          if [ "$RISK" = "critical" ]; then
+            echo "⚠️ CRITICAL risk level detected — admin notified"
+          fi
+
+      - name: Notify on failure
+        if: failure()
+        run: |
+          echo "## ❌ Maintenance Scan Failed" >> $GITHUB_STEP_SUMMARY
+          echo "The auto-scan edge function did not respond correctly." >> $GITHUB_STEP_SUMMARY
+          echo "Check that SUPABASE_FUNCTIONS_URL and CRON_SECRET are set in repository secrets." >> $GITHUB_STEP_SUMMARY

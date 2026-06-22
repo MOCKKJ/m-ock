@@ -13,14 +13,11 @@ function mapUser(user: User): AuthUser {
     username:
       user.user_metadata?.username ||
       user.user_metadata?.full_name ||
+      user.user_metadata?.name ||
       user.email!.split('@')[0],
-    avatar: user.user_metadata?.avatar_url,
+    // Google OAuth returns avatar as `picture`; email/password users use `avatar_url`
+    avatar: user.user_metadata?.avatar_url || user.user_metadata?.picture,
   };
-}
-
-function safeRedirectPath(path?: string | null) {
-  if (!path || !path.startsWith('/') || path.startsWith('//')) return '/';
-  return path;
 }
 
 export function useAuthActions() {
@@ -36,9 +33,41 @@ export function useAuthActions() {
         email,
         options: { shouldCreateUser: true },
       });
-      if (error) throw error;
+      if (error) {
+        // Supabase returns this when "Disable Sign-up" is enabled in Auth settings
+        const msg = error.message.toLowerCase();
+        if (msg.includes('signup') && msg.includes('not allowed')) {
+          throw new Error(
+            'Sign-ups are currently paused. Please sign in if you already have an account, or contact support.'
+          );
+        }
+        throw error;
+      }
       setOtpSent(true);
-      toast.success('OTP sent! Check your email 📬');
+      toast.success(`4-digit code sent to ${email}`, {
+        duration: 8000,
+        description: 'Check your inbox (and spam folder). The code expires in 10 minutes.',
+        action: {
+          label: '📬 Check Email',
+          onClick: () => {
+            // Open a webmail provider if detectable, otherwise do nothing
+            const domain = email.split('@')[1]?.toLowerCase() ?? '';
+            const url =
+              domain === 'gmail.com' || domain === 'googlemail.com'
+                ? 'https://mail.google.com'
+                : ['outlook.com','hotmail.com','live.com','msn.com'].includes(domain)
+                ? 'https://outlook.live.com'
+                : domain === 'yahoo.com' || domain === 'ymail.com'
+                ? 'https://mail.yahoo.com'
+                : domain.includes('icloud') || domain === 'me.com' || domain === 'mac.com'
+                ? 'https://www.icloud.com/mail'
+                : domain.includes('proton') || domain === 'pm.me'
+                ? 'https://mail.proton.me'
+                : null;
+            if (url) window.open(url, '_blank', 'noopener');
+          },
+        },
+      });
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : 'Failed to send OTP');
       setLoading(false);
@@ -46,40 +75,11 @@ export function useAuthActions() {
     setLoading(false);
   };
 
-  const resetPassword = async (email: string) => {
-    setLoading(true);
-    try {
-      const redirectTo = `${window.location.origin}/auth?reset=password`;
-      const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo });
-      if (error) throw error;
-      toast.success('Password reset link sent. Check your email.');
-    } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : 'Failed to send reset link');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const updatePassword = async (password: string) => {
-    setLoading(true);
-    try {
-      const { data, error } = await supabase.auth.updateUser({ password });
-      if (error) throw error;
-      if (data.user) login(mapUser(data.user));
-      toast.success('Password updated. You are signed in.');
-      navigate('/');
-    } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : 'Failed to update password');
-      setLoading(false);
-    }
-  };
-
   const verifyOtpAndSetPassword = async (
     email: string,
     token: string,
     password: string,
-    username?: string,
-    redirectPath?: string | null
+    username?: string
   ) => {
     setLoading(true);
     try {
@@ -99,59 +99,35 @@ export function useAuthActions() {
 
       login(mapUser(updateData.user));
       toast.success('Account created! Welcome to MockJ 🔥');
-      navigate(safeRedirectPath(redirectPath));
+      navigate('/');
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : 'Verification failed');
       setLoading(false);
     }
   };
 
-  const signInWithPassword = async (email: string, password: string, redirectPath?: string | null) => {
+  const signInWithPassword = async (email: string, password: string, rememberMe = true) => {
     setLoading(true);
     try {
       const { data, error } = await supabase.auth.signInWithPassword({ email, password });
       if (error) throw error;
       if (!data.user) throw new Error('No user returned');
 
+      // If "Remember Me" is off, clear session on tab close via sessionStorage flag
+      if (!rememberMe) {
+        sessionStorage.setItem('mockj_session_only', '1');
+      } else {
+        sessionStorage.removeItem('mockj_session_only');
+      }
+
       login(mapUser(data.user));
       toast.success('Welcome back 🔥');
-      navigate(safeRedirectPath(redirectPath));
+      navigate('/');
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : 'Login failed');
       setLoading(false);
     }
   };
 
-  const signInWithGoogle = async (redirectPath?: string | null) => {
-    setLoading(true);
-    try {
-      const redirectTo = `${window.location.origin}/auth?redirect=${encodeURIComponent(safeRedirectPath(redirectPath))}`;
-      const { error } = await supabase.auth.signInWithOAuth({
-        provider: 'google',
-        options: {
-          redirectTo,
-          queryParams: {
-            access_type: 'offline',
-            prompt: 'select_account',
-          },
-        },
-      });
-      if (error) throw error;
-    } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : 'Google sign-in failed');
-      setLoading(false);
-    }
-  };
-
-  return {
-    sendOtp,
-    verifyOtpAndSetPassword,
-    signInWithPassword,
-    signInWithGoogle,
-    resetPassword,
-    updatePassword,
-    loading,
-    otpSent,
-    setOtpSent,
-  };
+  return { sendOtp, verifyOtpAndSetPassword, signInWithPassword, loading, otpSent, setOtpSent };
 }

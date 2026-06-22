@@ -1,471 +1,249 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useAuth } from '@/contexts/AuthContext';
+/**
+ * useTokenWallet.ts
+ * Hook to fetch and manage the user's MOCKJ token balance,
+ * daily streak, badges, and transaction history.
+ *
+ * SINGLETON FIX: Module-level cache ensures only ONE interval and ONE set of
+ * listeners fires regardless of how many components call useTokenWallet().
+ * Previous bug: 6-9 simultaneous POSTs per session mount (each component
+ * spawned its own 60s interval).
+ */
+
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '@/lib/supabase';
-import type { AuthUser } from '@/types/auth';
+import { useAuth } from '@/contexts/AuthContext';
+import { getDeviceId } from '@/lib/deviceFingerprint';
+import { FunctionsHttpError } from '@supabase/supabase-js';
 
-export type TokenAction = 'chat' | 'image' | 'video';
-export type TokenCatalogId =
-  | 'chat-basic'
-  | 'chat-premium'
-  | 'image-standard'
-  | 'image-hd'
-  | 'image-ultra-real'
-  | 'video-4s'
-  | 'video-8s'
-  | 'video-12s'
-  | 'voice-message'
-  | 'voice-clone';
+export interface TokenTransaction {
+  id: string;
+  amount: number;
+  type: string;
+  description: string;
+  created_at: string;
+}
 
-const WALLET_KEY = 'mockj_token_wallet_v1';
-const REFERRAL_KEY = 'mockj_referral_store_v1';
-const PENDING_REFERRAL_KEY = 'mockj_pending_referral_code_v1';
-const PUBLIC_REFERRAL_ORIGIN = 'https://mockk.online';
-const STARTER_BALANCE = 1000;
-export const REFERRAL_BONUS = 250;
-const REFERRAL_MILESTONE = 25;
+export interface StreakInfo {
+  current: number;
+  longest: number;
+  totalClaims: number;
+  lastClaim: string | null;
+  canClaimToday: boolean;
+  todayReward: number;
+}
 
-export const TOKEN_COSTS: Record<TokenAction, number> = {
-  chat: 5,
-  image: 50,
-  video: 300,
+export interface ReferralRow {
+  id: string;
+  status: string;
+  referred_id: string;
+  referrer_reward: number;
+  created_at: string;
+}
+
+export interface WalletState {
+  balance: number;
+  lifetimeEarned: number;
+  lifetimeSpent: number;
+  streak: StreakInfo;
+  badges: string[];
+  transactions: TokenTransaction[];
+  referrals: { count: number; rows: ReferralRow[] };
+  loading: boolean;
+  error: string | null;
+}
+
+const DEFAULT_STREAK: StreakInfo = {
+  current: 0, longest: 0, totalClaims: 0,
+  lastClaim: null, canClaimToday: false, todayReward: 50,
 };
 
-export interface TokenCatalogItem {
-  id: TokenCatalogId;
-  action?: TokenAction;
-  label: string;
-  shortLabel: string;
-  cost: number;
-  category: 'chat' | 'image' | 'video' | 'voice';
-  description: string;
+const DEFAULT_STATE: WalletState = {
+  balance: 0, lifetimeEarned: 0, lifetimeSpent: 0,
+  streak: DEFAULT_STREAK, badges: [], transactions: [],
+  referrals: { count: 0, rows: [] }, loading: true, error: null,
+};
+
+// ── Module-level singleton state ───────────────────────────────────────────
+// All hook instances share ONE cache, ONE interval, and ONE set of listeners.
+// This eliminates the 6-9 concurrent POSTs that fired on every session mount.
+let _cachedState: WalletState = { ...DEFAULT_STATE };
+let _intervalId: ReturnType<typeof setInterval> | null = null;
+let _isPolling = false;
+const _subscribers = new Set<(s: WalletState) => void>();
+let _lastUserId: string | null = null;
+
+function notifySubscribers(state: WalletState) {
+  _cachedState = state;
+  _subscribers.forEach(fn => fn(state));
 }
 
-export const TOKEN_COST_CATALOG: TokenCatalogItem[] = [
-  { id: 'chat-basic', action: 'chat', label: 'Chat - Basic', shortLabel: 'Basic chat', cost: 5, category: 'chat', description: 'Standard MockJ chat response.' },
-  { id: 'chat-premium', action: 'chat', label: 'Chat - Premium', shortLabel: 'Premium chat', cost: 10, category: 'chat', description: 'Deeper reasoning and richer Project Brain context.' },
-  { id: 'image-standard', action: 'image', label: 'Image - Standard', shortLabel: 'Standard image', cost: 50, category: 'image', description: 'Fast MLTXPRO visual generation.' },
-  { id: 'image-hd', action: 'image', label: 'Image - HD', shortLabel: 'HD image', cost: 100, category: 'image', description: 'Sharper creator-grade image output.' },
-  { id: 'image-ultra-real', action: 'image', label: 'Image - Ultra Real', shortLabel: 'Ultra real image', cost: 150, category: 'image', description: 'Premium realism and detail pass.' },
-  { id: 'video-4s', action: 'video', label: 'Video - 4 seconds', shortLabel: '4 second video', cost: 300, category: 'video', description: 'Short MockJ motion clip.' },
-  { id: 'video-8s', action: 'video', label: 'Video - 8 seconds', shortLabel: '8 second video', cost: 600, category: 'video', description: 'Standard MockJ motion clip.' },
-  { id: 'video-12s', action: 'video', label: 'Video - 12 seconds', shortLabel: '12 second video', cost: 900, category: 'video', description: 'Extended MockJ motion clip.' },
-  { id: 'voice-message', label: 'Voice Message', shortLabel: 'Voice message', cost: 25, category: 'voice', description: 'Spoken MockJ reply output.' },
-  { id: 'voice-clone', label: 'Voice Clone', shortLabel: 'Voice clone', cost: 250, category: 'voice', description: 'Custom MLTXPRO voice identity setup.' },
-];
-
-interface WalletRecord {
-  balance: number;
-  createdAt: string;
-  updatedAt: string;
-}
-
-type WalletStore = Record<string, WalletRecord>;
-
-interface ReferralRecord {
-  code: string;
-  owner: string;
-  displayName: string;
-  createdAt: string;
-  updatedAt: string;
-  referrals: number;
-  tokensEarned: number;
-  appliedOwners: string[];
-}
-
-interface ReferralStore {
-  codes: Record<string, ReferralRecord>;
-  appliedByOwner: Record<string, { code: string; appliedAt: string; bonus: number }>;
-}
-
-export interface ReferralStats {
-  code: string;
-  link: string;
-  totalReferrals: number;
-  tokensEarned: number;
-  untilVip: number;
-  appliedCode: string | null;
-}
-
-export type ReferralApplyResult =
-  | { ok: true; message: string; code: string; bonus: number }
-  | { ok: false; reason: 'account-required' | 'empty' | 'not-found' | 'self' | 'already-applied'; message: string };
-
-function walletOwner(userId?: string | null): string | null {
-  return userId ? `user:${userId}` : null;
-}
-
-function loadStore(): WalletStore {
-  try {
-    return JSON.parse(localStorage.getItem(WALLET_KEY) ?? '{}') as WalletStore;
-  } catch {
-    return {};
-  }
-}
-
-function saveStore(store: WalletStore) {
-  localStorage.setItem(WALLET_KEY, JSON.stringify(store));
-}
-
-function saveWallet(owner: string, wallet: WalletRecord) {
-  const store = loadStore();
-  store[owner] = wallet;
-  saveStore(store);
-}
-
-function ensureWallet(owner: string): WalletRecord {
-  const store = loadStore();
-  if (store[owner]) return store[owner];
-
-  const now = new Date().toISOString();
-  const wallet = { balance: STARTER_BALANCE, createdAt: now, updatedAt: now };
-  store[owner] = wallet;
-  saveStore(store);
-  return wallet;
-}
-
-function creditWallet(owner: string, amount: number): WalletRecord {
-  const store = loadStore();
-  const now = new Date().toISOString();
-  const wallet = store[owner] ?? { balance: STARTER_BALANCE, createdAt: now, updatedAt: now };
-  const updated = { ...wallet, balance: wallet.balance + amount, updatedAt: now };
-  store[owner] = updated;
-  saveStore(store);
-  return updated;
-}
-
-function validCloudWallet(user?: AuthUser | null): WalletRecord | null {
-  const wallet = user?.tokenWallet;
-  if (!wallet || typeof wallet.balance !== 'number' || wallet.balance < 0) return null;
-  const now = new Date().toISOString();
-  return {
-    balance: Math.floor(wallet.balance),
-    createdAt: wallet.createdAt || now,
-    updatedAt: wallet.updatedAt || now,
-  };
-}
-
-async function persistWalletToAccount(wallet: WalletRecord) {
-  const { error } = await supabase.auth.updateUser({
-    data: {
-      mockj_token_wallet: wallet,
+async function callTokenOps(body: Record<string, unknown>) {
+  const { data: { session } } = await supabase.auth.getSession();
+  const { data, error } = await supabase.functions.invoke('token-ops', {
+    body,
+    headers: {
+      ...(session?.access_token ? { 'Authorization': `Bearer ${session.access_token}` } : {}),
+      'x-device-id': getDeviceId(),
     },
   });
-  if (error) throw error;
-}
-
-function loadReferralStore(): ReferralStore {
-  try {
-    const store = JSON.parse(localStorage.getItem(REFERRAL_KEY) ?? '{}') as Partial<ReferralStore>;
-    return {
-      codes: store.codes ?? {},
-      appliedByOwner: store.appliedByOwner ?? {},
-    };
-  } catch {
-    return { codes: {}, appliedByOwner: {} };
-  }
-}
-
-function saveReferralStore(store: ReferralStore) {
-  localStorage.setItem(REFERRAL_KEY, JSON.stringify(store));
-}
-
-function referralHash(input: string): string {
-  let hash = 0;
-  for (let index = 0; index < input.length; index += 1) {
-    hash = ((hash << 5) - hash + input.charCodeAt(index)) | 0;
-  }
-  return Math.abs(hash).toString(36).toUpperCase().padStart(5, '0').slice(0, 5);
-}
-
-function referralBase(user: AuthUser): string {
-  const source = user.username || user.email?.split('@')[0] || 'MOCKJ';
-  return source.replace(/[^a-z0-9]/gi, '').toUpperCase().slice(0, 8) || 'MOCKJ';
-}
-
-export function normalizeReferralCode(rawCode: string): string {
-  let value = rawCode.trim();
-  if (!value) return '';
-
-  try {
-    const url = new URL(value);
-    const segments = url.pathname.split('/').filter(Boolean);
-    const refIndex = segments.findIndex(segment => segment.toLowerCase() === 'ref');
-    if (refIndex >= 0 && segments[refIndex + 1]) {
-      value = segments[refIndex + 1];
+  if (error) {
+    let msg = error.message;
+    if (error instanceof FunctionsHttpError) {
+      try { const t = await error.context?.text(); msg = t || msg; } catch { /* noop */ }
     }
-  } catch {
-    // Raw codes are valid too.
+    throw new Error(msg);
   }
-
-  return decodeURIComponent(value).trim().replace(/[^a-z0-9-]/gi, '').toUpperCase();
+  return data;
 }
 
-export function referralLinkForCode(code: string): string {
-  return `${PUBLIC_REFERRAL_ORIGIN}/ref/${encodeURIComponent(normalizeReferralCode(code))}`;
+async function fetchBalanceSingleton(userId: string | null, force = false) {
+  // Never call token-ops without a real user — it will always 401
+  if (!userId) {
+    notifySubscribers({ ...DEFAULT_STATE, loading: false });
+    return;
+  }
+  // Verify session is still valid before invoking
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session?.access_token) {
+    notifySubscribers({ ...DEFAULT_STATE, loading: false });
+    return;
+  }
+  // Debounce: skip if already in-flight (bypass with force=true for token-spent events)
+  if (_isPolling && !force) return;
+  _isPolling = true;
+  try {
+    const data = await callTokenOps({ action: 'balance' });
+    if (data && typeof data.balance === 'number') {
+      notifySubscribers({
+        balance:        data.balance,
+        lifetimeEarned: data.lifetimeEarned ?? 0,
+        lifetimeSpent:  data.lifetimeSpent ?? 0,
+        streak:         data.streak ?? DEFAULT_STREAK,
+        badges:         data.badges ?? [],
+        transactions:   data.transactions ?? [],
+        referrals:      data.referrals ?? { count: 0, rows: [] },
+        loading: false,
+        error: null,
+      });
+    } else {
+      notifySubscribers({ ..._cachedState, loading: false });
+    }
+  } catch (err) {
+    console.warn('[useTokenWallet] fetchBalance failed (keeping existing balance):', (err as Error).message);
+    notifySubscribers({ ..._cachedState, loading: false, error: (err as Error).message });
+  } finally {
+    _isPolling = false;
+  }
 }
 
-export function storePendingReferralCode(rawCode: string) {
-  const code = normalizeReferralCode(rawCode);
-  if (code) localStorage.setItem(PENDING_REFERRAL_KEY, code);
+function startSingletonPolling(userId: string | null) {
+  // If user changed, restart polling
+  if (_lastUserId !== userId) {
+    stopSingletonPolling();
+    _lastUserId = userId;
+  }
+  // Don't start polling for unauthenticated users — prevents constant 401s
+  if (!userId) {
+    notifySubscribers({ ...DEFAULT_STATE, loading: false });
+    return;
+  }
+  if (_intervalId !== null) return; // already running
+
+  fetchBalanceSingleton(userId);
+  _intervalId = setInterval(() => fetchBalanceSingleton(userId), 60_000);
+
+  // Tab focus refetch (single handler for all instances)
+  const onVisibility = () => {
+    if (document.visibilityState === 'visible') fetchBalanceSingleton(userId);
+  };
+  document.addEventListener('visibilitychange', onVisibility);
+
+  // Token spend event — force-refetch even if a poll is in progress
+  const onSpent = () => fetchBalanceSingleton(userId, true);
+  window.addEventListener('mockj:tokens-spent', onSpent);
+
+  // Checkout success — force-refetch balance after returning from Stripe
+  const onCheckoutSuccess = () => fetchBalanceSingleton(userId, true);
+  window.addEventListener('mockj:checkout-success', onCheckoutSuccess);
+
+  // Store cleanup refs on the interval closure via a cleanup map
+  _cleanupHandlers.push(() => {
+    document.removeEventListener('visibilitychange', onVisibility);
+    window.removeEventListener('mockj:tokens-spent', onSpent);
+    window.removeEventListener('mockj:checkout-success', onCheckoutSuccess);
+  });
 }
 
-export function consumePendingReferralCode(): string | null {
-  const code = localStorage.getItem(PENDING_REFERRAL_KEY);
-  if (code) localStorage.removeItem(PENDING_REFERRAL_KEY);
-  return code;
+const _cleanupHandlers: (() => void)[] = [];
+
+function stopSingletonPolling() {
+  if (_intervalId !== null) {
+    clearInterval(_intervalId);
+    _intervalId = null;
+  }
+  _cleanupHandlers.forEach(fn => fn());
+  _cleanupHandlers.length = 0;
+  _isPolling = false;
 }
 
-function referralCodeForUser(user: AuthUser): string {
-  return `${referralBase(user)}-${referralHash(user.id)}`;
-}
-
-function isReferralCodeShape(code: string): boolean {
-  return /^[A-Z0-9]{2,8}-[A-Z0-9]{5}$/.test(code);
-}
-
-function ensureReferralRecord(owner: string, user: AuthUser): ReferralRecord {
-  const store = loadReferralStore();
-  const code = referralCodeForUser(user);
-  const now = new Date().toISOString();
-  const existing = store.codes[code];
-  const record: ReferralRecord = existing
-    ? { ...existing, owner, displayName: user.username || user.email, updatedAt: now }
-    : {
-        code,
-        owner,
-        displayName: user.username || user.email,
-        createdAt: now,
-        updatedAt: now,
-        referrals: 0,
-        tokensEarned: 0,
-        appliedOwners: [],
-      };
-
-  store.codes[code] = record;
-  saveReferralStore(store);
-  return record;
-}
-
-function catalogCost(id: TokenCatalogId): number {
-  return TOKEN_COST_CATALOG.find(item => item.id === id)?.cost ?? 0;
-}
+// ─────────────────────────────────────────────────────────────────────────────
 
 export function useTokenWallet() {
   const { user } = useAuth();
-  const owner = useMemo(() => walletOwner(user?.id), [user?.id]);
-  const [balance, setBalance] = useState(() => owner ? ensureWallet(owner).balance : 0);
-  const [referralVersion, setReferralVersion] = useState(0);
+  const [wallet, setWallet] = useState<WalletState>(_cachedState);
+  const mountedRef = useRef(true);
 
+  // Subscribe to singleton state
   useEffect(() => {
-    if (!owner) {
-      setBalance(0);
-      return;
-    }
-
-    const cloudWallet = validCloudWallet(user);
-    if (cloudWallet) {
-      saveWallet(owner, cloudWallet);
-      setBalance(cloudWallet.balance);
-      return;
-    }
-
-    const localWallet = ensureWallet(owner);
-    setBalance(localWallet.balance);
-    void persistWalletToAccount(localWallet).catch(error => {
-      console.error('Failed to persist token wallet:', error);
-    });
-  }, [owner, user]);
-
-  const canSpendTokens = useCallback(
-    (action: TokenAction) => {
-      if (!owner) return false;
-      return ensureWallet(owner).balance >= TOKEN_COSTS[action];
-    },
-    [owner]
-  );
-
-  const spendTokens = useCallback(
-    (action: TokenAction) => {
-      if (!owner) return false;
-      const store = loadStore();
-      const wallet = store[owner] ?? ensureWallet(owner);
-      const cost = TOKEN_COSTS[action];
-
-      if (wallet.balance < cost) return false;
-
-      const updated = {
-        ...wallet,
-        balance: wallet.balance - cost,
-        updatedAt: new Date().toISOString(),
-      };
-      store[owner] = updated;
-      saveStore(store);
-      setBalance(updated.balance);
-      void persistWalletToAccount(updated).catch(error => {
-        console.error('Failed to persist token spend:', error);
-      });
-      return true;
-    },
-    [owner]
-  );
-
-  const canSpendCatalogItem = useCallback(
-    (id: TokenCatalogId) => {
-      if (!owner) return false;
-      return ensureWallet(owner).balance >= catalogCost(id);
-    },
-    [owner]
-  );
-
-  const spendCatalogItem = useCallback(
-    (id: TokenCatalogId) => {
-      if (!owner) return false;
-      const cost = catalogCost(id);
-      const store = loadStore();
-      const wallet = store[owner] ?? ensureWallet(owner);
-
-      if (wallet.balance < cost) return false;
-
-      const updated = {
-        ...wallet,
-        balance: wallet.balance - cost,
-        updatedAt: new Date().toISOString(),
-      };
-      store[owner] = updated;
-      saveStore(store);
-      setBalance(updated.balance);
-      void persistWalletToAccount(updated).catch(error => {
-        console.error('Failed to persist token spend:', error);
-      });
-      return true;
-    },
-    [owner]
-  );
-
-  const addTokens = useCallback(
-    (amount: number) => {
-      if (!owner || amount <= 0) return false;
-      const updated = creditWallet(owner, amount);
-      setBalance(updated.balance);
-      void persistWalletToAccount(updated).catch(error => {
-        console.error('Failed to persist token credit:', error);
-      });
-      return true;
-    },
-    [owner]
-  );
-
-  const referralStats = useMemo<ReferralStats | null>(() => {
-    if (!owner || !user) return null;
-
-    const record = ensureReferralRecord(owner, user);
-    const store = loadReferralStore();
-    const applied = store.appliedByOwner[owner];
-
-    return {
-      code: record.code,
-      link: referralLinkForCode(record.code),
-      totalReferrals: record.referrals,
-      tokensEarned: record.tokensEarned,
-      untilVip: Math.max(REFERRAL_MILESTONE - record.referrals, 0),
-      appliedCode: applied?.code ?? null,
+    mountedRef.current = true;
+    const subscriber = (s: WalletState) => {
+      if (mountedRef.current) setWallet(s);
     };
-  }, [owner, referralVersion, user]);
+    _subscribers.add(subscriber);
 
-  const applyReferralCode = useCallback(
-    (rawCode: string): ReferralApplyResult => {
-      if (!owner || !user) {
-        return {
-          ok: false,
-          reason: 'account-required',
-          message: 'Create a free account before applying a referral code.',
-        };
+    // Start/restart singleton polling for this user
+    startSingletonPolling(user?.id ?? null);
+
+    return () => {
+      mountedRef.current = false;
+      _subscribers.delete(subscriber);
+      // Only stop polling when the LAST subscriber unmounts
+      if (_subscribers.size === 0) {
+        stopSingletonPolling();
+        _lastUserId = null;
       }
+    };
+  }, [user?.id]);
 
-      const code = normalizeReferralCode(rawCode);
-      if (!code) {
-        return { ok: false, reason: 'empty', message: 'Enter a referral code first.' };
-      }
+  // Claim signup bonus
+  const claimSignupBonus = useCallback(async () => {
+    const data = await callTokenOps({ action: 'signup-bonus' });
+    if (!data.alreadyClaimed) await fetchBalanceSingleton(user?.id ?? null);
+    return data as { alreadyClaimed: boolean; bonus: number };
+  }, [user?.id]);
 
-      const ownRecord = ensureReferralRecord(owner, user);
-      const store = loadReferralStore();
+  // Claim daily login reward
+  const claimDailyLogin = useCallback(async () => {
+    const data = await callTokenOps({ action: 'daily-login' });
+    if (!data.alreadyClaimed) await fetchBalanceSingleton(user?.id ?? null);
+    return data as { alreadyClaimed: boolean; streak: number; reward: number; notes: string[] };
+  }, [user?.id]);
 
-      if (ownRecord.code === code) {
-        return { ok: false, reason: 'self', message: 'You cannot apply your own referral code.' };
-      }
+  // Apply referral code
+  const applyReferralCode = useCallback(async (code: string) => {
+    const data = await callTokenOps({ action: 'referral-apply', code });
+    if (data.applied) await fetchBalanceSingleton(user?.id ?? null);
+    return data as { applied?: boolean; alreadyApplied?: boolean; error?: string };
+  }, [user?.id]);
 
-      if (store.appliedByOwner[owner]) {
-        return {
-          ok: false,
-          reason: 'already-applied',
-          message: `Referral code ${store.appliedByOwner[owner].code} is already applied to this account.`,
-        };
-      }
-
-      const now = new Date().toISOString();
-      const target = store.codes[code];
-
-      if (!target) {
-        if (!isReferralCodeShape(code)) {
-          return { ok: false, reason: 'not-found', message: 'Enter a valid MockJ referral code.' };
-        }
-
-        store.appliedByOwner[owner] = { code, appliedAt: now, bonus: REFERRAL_BONUS };
-        saveReferralStore(store);
-        const updatedCurrentWallet = creditWallet(owner, REFERRAL_BONUS);
-        setBalance(updatedCurrentWallet.balance);
-        setReferralVersion(version => version + 1);
-
-        return {
-          ok: true,
-          code,
-          bonus: REFERRAL_BONUS,
-          message: `${REFERRAL_BONUS} MLTX referral bonus added.`,
-        };
-      }
-
-      if (target.owner === owner) {
-        return { ok: false, reason: 'self', message: 'You cannot apply your own referral code.' };
-      }
-
-      store.appliedByOwner[owner] = { code, appliedAt: now, bonus: REFERRAL_BONUS };
-      store.codes[code] = {
-        ...target,
-        referrals: target.referrals + 1,
-        tokensEarned: target.tokensEarned + REFERRAL_BONUS,
-        updatedAt: now,
-        appliedOwners: Array.from(new Set([...(target.appliedOwners ?? []), owner])),
-      };
-      saveReferralStore(store);
-
-      const updatedCurrentWallet = creditWallet(owner, REFERRAL_BONUS);
-      creditWallet(target.owner, REFERRAL_BONUS);
-      setBalance(updatedCurrentWallet.balance);
-      setReferralVersion(version => version + 1);
-
-      return {
-        ok: true,
-        code,
-        bonus: REFERRAL_BONUS,
-        message: `${REFERRAL_BONUS} MLTX referral bonus added.`,
-      };
-    },
-    [owner, user]
-  );
+  // Refresh
+  const refresh = useCallback(() => fetchBalanceSingleton(user?.id ?? null), [user?.id]);
 
   return {
-    tokenBalance: balance,
-    tokenCosts: TOKEN_COSTS,
-    tokenCatalog: TOKEN_COST_CATALOG,
-    tokenWalletReady: Boolean(owner),
-    canSpendTokens,
-    spendTokens,
-    canSpendCatalogItem,
-    spendCatalogItem,
-    addTokens,
-    referralStats,
-    referralBonus: REFERRAL_BONUS,
+    wallet,
+    claimSignupBonus,
+    claimDailyLogin,
     applyReferralCode,
-    starterBalance: STARTER_BALANCE,
+    refresh,
   };
 }

@@ -1,7 +1,32 @@
 import { corsHeaders } from '../_shared/cors.ts';
 
-const ELEVENLABS_VOICE_ID = 'rnINyKVJJCsVUHIOdXVj';
+const ELEVENLABS_VOICE_ID = 'N2lVS1w4EtoT3dr4eOWO';
 const ELEVENLABS_API_URL = `https://api.elevenlabs.io/v1/text-to-speech/${ELEVENLABS_VOICE_ID}`;
+
+// ── Global concurrency guard — paid ElevenLabs plans support 3+ concurrent requests ──
+let activeTTSCount = 0;
+const MAX_CONCURRENT = 3; // 1 = free/starter · 3 = Creator+ · 5 = Pro
+const TTS_QUEUE: Array<() => void> = [];
+
+async function acquireTTSSlot(): Promise<() => void> {
+  return new Promise((resolve) => {
+    const tryAcquire = () => {
+      if (activeTTSCount < MAX_CONCURRENT) {
+        activeTTSCount++;
+        resolve(() => {
+          activeTTSCount--;
+          if (TTS_QUEUE.length > 0) {
+            const next = TTS_QUEUE.shift()!;
+            next();
+          }
+        });
+      } else {
+        TTS_QUEUE.push(tryAcquire);
+      }
+    };
+    tryAcquire();
+  });
+}
 
 // Strip markdown so the TTS reads clean spoken text
 function stripMarkdown(text: string): string {
@@ -29,7 +54,7 @@ Deno.serve(async (req: Request) => {
   try {
     const apiKey = Deno.env.get('ELEVENLABS_API_KEY');
     if (!apiKey) {
-      console.error('[mltxpro-voice] voice API key not configured');
+      console.error('[elevenlabs-tts] ELEVENLABS_API_KEY not configured');
       return new Response(
         JSON.stringify({ error: 'TTS service not configured' }),
         { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
@@ -45,11 +70,16 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    // Clean and cap the text before sending it to the voice service.
+    // Clean and cap the text (ElevenLabs charges per character)
     const cleanText = stripMarkdown(text).slice(0, 5000);
-    console.log(`[mltxpro-voice] Generating voice audio, chars=${cleanText.length}`);
+    console.log(`[elevenlabs-tts] Generating TTS, chars=${cleanText.length}, voice=${ELEVENLABS_VOICE_ID}, queue=${TTS_QUEUE.length}, active=${activeTTSCount}`);
 
-    const response = await fetch(ELEVENLABS_API_URL, {
+    // Acquire concurrency slot — queues request if ElevenLabs limit would be exceeded
+    const releaseSlot = await acquireTTSSlot();
+
+    let response: Response;
+    try {
+      response = await fetch(ELEVENLABS_API_URL, {
       method: 'POST',
       headers: {
         'xi-api-key': apiKey,
@@ -58,7 +88,7 @@ Deno.serve(async (req: Request) => {
       },
       body: JSON.stringify({
         text: cleanText,
-        model_id: 'eleven_turbo_v2_5',
+        model_id: 'eleven_flash_v2_5',   // fastest + lowest latency on paid plans
         voice_settings: {
           stability: 0.45,
           similarity_boost: 0.8,
@@ -66,11 +96,28 @@ Deno.serve(async (req: Request) => {
           use_speaker_boost: true,
         },
       }),
-    });
+      });
+    } finally {
+      releaseSlot(); // always release the slot whether success or error
+    }
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error('[mltxpro-voice] voice service error:', response.status, errorText.slice(0, 300));
+      console.error('[elevenlabs-tts] ElevenLabs error:', response.status, errorText.slice(0, 300));
+      // Detect quota / billing exhaustion (401 quota_exceeded OR 402 payment_required)
+      const isQuotaExceeded =
+        (response.status === 401 && errorText.includes('quota_exceeded')) ||
+        response.status === 402 ||
+        errorText.includes('quota_exceeded') ||
+        errorText.includes('insufficient_credits') ||
+        errorText.includes('credit') && errorText.includes('0');
+      if (isQuotaExceeded) {
+        console.error('[elevenlabs-tts] Quota exhausted — update ELEVENLABS_API_KEY in OnSpace Cloud Secrets');
+        return new Response(
+          JSON.stringify({ error: 'ElevenLabs quota exhausted — voice is temporarily unavailable. Please top up credits at elevenlabs.io/subscription.' }),
+          { status: 402, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
       return new Response(
         JSON.stringify({ error: `TTS error: ${errorText.slice(0, 200)}` }),
         { status: response.status, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
@@ -78,7 +125,7 @@ Deno.serve(async (req: Request) => {
     }
 
     const audioBuffer = await response.arrayBuffer();
-    console.log(`[mltxpro-voice] Audio generated, bytes=${audioBuffer.byteLength}`);
+    console.log(`[elevenlabs-tts] Audio generated, bytes=${audioBuffer.byteLength}`);
 
     return new Response(audioBuffer, {
       headers: {
@@ -88,7 +135,7 @@ Deno.serve(async (req: Request) => {
       },
     });
   } catch (err) {
-    console.error('[mltxpro-voice] Unexpected error:', err);
+    console.error('[elevenlabs-tts] Unexpected error:', err);
     return new Response(
       JSON.stringify({ error: 'Internal server error' }),
       { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }

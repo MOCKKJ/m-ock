@@ -32,7 +32,7 @@ const data: SEOPageData = {
     { q: 'What tasks are agents best suited for?', a: 'Research, synthesis, content generation, code planning, document analysis, and any task that requires multiple sequential steps and decision points.' },
   ],
   comparison: {
-    headers: ['MockJ 4', 'Basic agents', 'Frameworks', 'Assistants'],
+    headers: ['MockJ 4', 'AutoGPT', 'LangChain', 'OpenAI Ass.'],
     rows: [
       { label: 'Voice Control',       values: [true,  false, false, false] },
       { label: 'Image Generation',    values: [true,  false, false, false] },

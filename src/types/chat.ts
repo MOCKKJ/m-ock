@@ -26,23 +26,14 @@ export interface ImageGenRequest {
   style: 'realistic' | 'artistic' | 'anime' | 'sketch' | 'cyberpunk' | 'watercolor' | 'oil' | '3d';
   aspectRatio: '1:1' | '16:9' | '9:16' | '4:3';
   quality?: string;
-  modelVersion?: string;
   sourceImageDataUrl?: string; // for image editing
-  charConsistency?: boolean;
-  facePreservation?: boolean;
-  addWatermark?: boolean;
-  privateMode?: boolean;
+  modelId?: string;            // specific OnSpace AI model to use
 }
-
-export type VideoStyle = 'cinematic' | 'animation' | 'documentary' | 'abstract';
-export type VideoDuration = '4s' | '8s' | '12s';
-export type VideoAspectRatio = '16:9' | '9:16' | '1:1';
 
 export interface VideoGenRequest {
   prompt: string;
-  duration: VideoDuration;
-  style: VideoStyle;
-  aspectRatio?: VideoAspectRatio;
+  duration: '5s' | '10s' | '15s';
+  style: 'cinematic' | 'animation' | 'documentary' | 'abstract';
 }
 
 export interface VideoTask {
@@ -51,4 +42,7 @@ export interface VideoTask {
   progress: number;
   videoUrl?: string;
   error?: string;
+  // Original prompt stored client-side and passed back to video-check for DB metadata
+  originalPrompt?: string;
+  originalStyle?: string;
 }

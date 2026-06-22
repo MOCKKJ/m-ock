@@ -3,20 +3,60 @@
  * MockJ 4 — Main Marketing Landing Page
  * Route: /landing
  */
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Mic, Code2, Brain, Globe, FileText, Zap, Bot, Image, Video,
   ChevronDown, ChevronUp, ArrowRight, Check, Crown, Star,
-  MessageSquare, Cpu, Volume2,
+  MessageSquare, Cpu, Volume2, TrendingUp, Users,
 } from 'lucide-react';
 import logoImg from '@/assets/mockj-logo.png';
 import heroBg from '@/assets/mocka-hero-bg.jpg';
-import PricingModal from '@/components/features/PricingModal';
 import { cn } from '@/lib/utils';
+import { supabase } from '@/lib/supabase';
 
-const RED = 'hsl(4 90% 58%)';
+const RED    = 'hsl(4 90% 58%)';
+const GREEN  = 'hsl(142 70% 55%)';
+const GREEN2 = 'hsl(142 70% 40%)';
 const VIOLET = 'hsl(265 80% 65%)';
+const PINK   = 'hsl(310 80% 70%)';
+const GOLD   = 'hsl(38 95% 65%)';
+
+// ── Luxury sparkle field for hero ────────────────────────────────────────
+const SPARKLE_COLORS = [GREEN, PINK, VIOLET, GOLD, 'rgba(255,255,255,0.9)', GREEN2, RED];
+const HERO_SPARKLES = Array.from({ length: 55 }, (_, i) => ({
+  id: i,
+  left: `${(i * 1.85 + Math.sin(i * 0.7) * 12) % 100}%`,
+  top:  `${(i * 2.1  + Math.cos(i * 0.9) * 18) % 100}%`,
+  size: (i % 4 === 0) ? 4 : (i % 3 === 0) ? 3 : 2,
+  dur:  `${3.5 + (i % 6)}s`,
+  delay:`${(i * 0.38) % 8}s`,
+  color: SPARKLE_COLORS[i % SPARKLE_COLORS.length],
+  isStar: i % 7 === 0,
+}));
+
+function HeroSparkles() {
+  return (
+    <div className="absolute inset-0 pointer-events-none overflow-hidden z-0">
+      {HERO_SPARKLES.map(s => (
+        <div
+          key={s.id}
+          className={s.isStar ? 'sparkle-star' : 'sparkle'}
+          style={{
+            left: s.left, top: s.top,
+            width: s.size, height: s.size,
+            background: s.color,
+            boxShadow: `0 0 ${s.size * 5}px ${s.color}, 0 0 ${s.size * 10}px ${s.color}55`,
+            animation: s.isStar
+              ? `sparkle-twinkle ${s.dur} ease-in-out infinite`
+              : `sparkle-drift ${s.dur} ease-in-out infinite`,
+            animationDelay: s.delay,
+          }}
+        />
+      ))}
+    </div>
+  );
+}
 
 // ─── Data ────────────────────────────────────────────────────────────────────
 
@@ -47,7 +87,7 @@ const FAQS = [
   },
   {
     q: 'How does the voice command feature work?',
-    a: 'MockJ uses browser-native speech input combined with MLTXPRO Voice for natural voice output. Speak your request — MockJ responds in real-time, reads answers aloud, and can execute tasks like generating images or writing code based on what you say.',
+    a: 'MockJ uses browser-native Web Speech API combined with ElevenLabs for natural voice output. Speak your request — MockJ responds in real-time, reads answers aloud, and can execute tasks like generating images or writing code based on what you say.',
   },
   {
     q: 'What is Project Memory?',
@@ -55,7 +95,7 @@ const FAQS = [
   },
   {
     q: 'Is MockJ 4 free to use?',
-    a: 'Yes — MockJ offers a free tier with 10 chat messages, 10 signed-in image generations, and 1 video per day. MockJ Pro (from $50.99/mo) gives you unlimited access to all features including voice, advanced image tools, and priority AI models.',
+    a: 'Yes — MockJ offers a free tier with 10 chat messages, 3 image generations, and 1 video per day. MockJ Pro (from $50.99/mo) gives you unlimited access to all features including voice, advanced image tools, and priority AI models.',
   },
   {
     q: 'Can I use generated images commercially?',
@@ -63,7 +103,7 @@ const FAQS = [
   },
   {
     q: 'What AI models power MockJ 4?',
-    a: 'MockJ 4 runs through MLTXPRO-owned chat, image, and video experiences. The app presents these capabilities as MockJ tools, not third-party generator brands.',
+    a: 'MockJ 4 uses the latest Gemini and GPT models for chat and reasoning, Sora 2 for video generation, and proprietary OnSpace AI models for image generation and editing.',
   },
 ];
 
@@ -73,7 +113,7 @@ const PLANS = [
     price: '$0',
     period: '',
     highlight: false,
-    features: ['10 chat messages / day', '10 signed-in image credits', '1 video / day', 'Basic voice input', 'Project Brain (read-only)', 'Community support'],
+    features: ['10 chat messages / day', '3 image generations / day', '1 video / day', 'Basic voice input', 'Project Brain (read-only)', 'Community support'],
   },
   {
     name: 'Pro',
@@ -81,7 +121,7 @@ const PLANS = [
     period: '/mo',
     highlight: true,
     badge: 'Most Popular',
-    features: ['Unlimited chat messages', 'Unlimited image generations', 'Unlimited video generations', 'MLTXPRO voice output', 'Full Project Memory & editing', 'Commercial image license', 'Advanced creator tools', 'Priority MockJ processing', 'Priority support'],
+    features: ['Unlimited chat messages', 'Unlimited image generations', 'Unlimited video generations', 'ElevenLabs voice output', 'Full Project Memory & editing', 'Commercial image license', 'Advanced creator tools', 'Priority AI models', 'Priority support'],
   },
   {
     name: 'Intro',
@@ -93,6 +133,111 @@ const PLANS = [
   },
 ];
 
+// ─── Social Proof Widget ─────────────────────────────────────────────────────
+
+function useSocialProof() {
+  const [tokensToday, setTokensToday] = useState<number | null>(null);
+  const [activeNow, setActiveNow] = useState<number | null>(null);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const fetchStats = async () => {
+    try {
+      const now = new Date();
+      const last24h = new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString();
+      const last5min = new Date(now.getTime() - 5 * 60 * 1000).toISOString();
+
+      const [earnedRes, activeRes] = await Promise.all([
+        // Tokens earned today (positive transactions in last 24h)
+        supabase
+          .from('token_transactions')
+          .select('amount')
+          .gt('amount', 0)
+          .gte('created_at', last24h),
+        // Users active in last 5 minutes (distinct users with recent transactions)
+        supabase
+          .from('token_transactions')
+          .select('user_id')
+          .gte('created_at', last5min),
+      ]);
+
+      const totalEarned = (earnedRes.data ?? []).reduce((s, r) => s + (r.amount ?? 0), 0);
+      // Count distinct active users
+      const distinctActive = new Set((activeRes.data ?? []).map(r => r.user_id)).size;
+
+      setTokensToday(totalEarned);
+      // Add a small floor so it never shows 0 (there's always the platform itself)
+      setActiveNow(Math.max(distinctActive, 1));
+    } catch {
+      // Fail silently — social proof is non-critical
+    }
+  };
+
+  useEffect(() => {
+    fetchStats();
+    timerRef.current = setInterval(fetchStats, 60_000);
+    return () => {
+      if (timerRef.current) clearInterval(timerRef.current);
+    };
+  // The error message indicated an issue with 'react-hooks/exhaustive-deps' rule,
+  // which is typically a linter rule, not a syntax error.
+  // Removing the `eslint-disable-next-line` comment to prevent false positives if the linter setup is incorrect,
+  // or if the dependencies for `fetchStats` actually need to be included.
+  // However, `fetchStats` itself has no external dependencies beyond `supabase`
+  // which is a global/module-level import, so it's stable.
+  // The current dependency array `[]` is correct for a one-time setup of an interval.
+  }, []);
+
+  return { tokensToday, activeNow };
+}
+
+function SocialProofWidget() {
+  const { tokensToday, activeNow } = useSocialProof();
+
+  if (tokensToday === null && activeNow === null) return null;
+
+  const formatTokens = (n: number) => {
+    if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+    if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
+    return n.toLocaleString();
+  };
+
+  return (
+    <div className="flex items-center gap-3 flex-wrap justify-center">
+      {tokensToday !== null && (
+        <div
+          className="flex items-center gap-2 px-4 py-2 rounded-full text-xs font-bold"
+          style={{
+            background: 'hsl(142 70% 50% / 0.08)',
+            border: '1px solid hsl(142 70% 50% / 0.25)',
+            color: 'hsl(142 70% 65%)',
+          }}
+        >
+          <TrendingUp className="w-3.5 h-3.5" />
+          <span>
+            <strong>{formatTokens(tokensToday)}</strong> tokens earned today
+          </span>
+        </div>
+      )}
+      {activeNow !== null && (
+        <div
+          className="flex items-center gap-2 px-4 py-2 rounded-full text-xs font-bold"
+          style={{
+            background: 'hsl(191 97% 55% / 0.08)',
+            border: '1px solid hsl(191 97% 55% / 0.25)',
+            color: 'hsl(191 97% 65%)',
+          }}
+        >
+          <span className="w-1.5 h-1.5 rounded-full bg-[hsl(191_97%_55%)] animate-pulse shrink-0" />
+          <Users className="w-3.5 h-3.5" />
+          <span>
+            <strong>{activeNow}</strong> {activeNow === 1 ? 'user' : 'users'} earning right now
+          </span>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Components ─────────────────────────────────────────────────────────────
 
 function NavBar() {
@@ -103,9 +248,12 @@ function NavBar() {
         <div className="w-8 h-8 rounded-lg overflow-hidden ring-1" style={{ ringColor: RED }}>
           <img src={logoImg} alt="MockJ" className="w-full h-full object-cover" />
         </div>
-        <span className="font-black text-base text-foreground" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>
-          MockJ <span style={{ color: RED }}>4</span>
-        </span>
+        <div className="flex flex-col leading-none">
+          <span className="font-black text-base text-foreground" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>
+            MockJ <span style={{ color: RED }}>4</span>
+          </span>
+          <span className="hidden sm:block text-[8px] font-bold uppercase tracking-widest" style={{ color: 'hsl(142 70% 55% / 0.6)' }}>Your Digital Plug</span>
+        </div>
       </a>
       <div className="flex-1" />
       <div className="hidden sm:flex items-center gap-5 text-sm text-muted-foreground">
@@ -146,16 +294,6 @@ function FAQItem({ q, a }: { q: string; a: string }) {
 
 export default function LandingPage() {
   const navigate = useNavigate();
-  const [showPricing, setShowPricing] = useState(false);
-
-  const handlePlanClick = (planName: string) => {
-    if (planName === 'Free') {
-      navigate('/');
-      return;
-    }
-
-    setShowPricing(true);
-  };
 
   return (
     <div className="min-h-screen bg-[hsl(224_20%_4%)] text-foreground" style={{ fontFamily: 'Inter, sans-serif' }}>
@@ -168,47 +306,102 @@ export default function LandingPage() {
           style={{ backgroundImage: `url(${heroBg})` }}
         />
         <div className="absolute inset-0 bg-gradient-to-b from-transparent via-[hsl(224_20%_4%_/_0.6)] to-[hsl(224_20%_4%)]" />
-        <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[900px] h-[400px] pointer-events-none" style={{ background: 'radial-gradient(ellipse at center top, hsl(4 90% 58% / 0.13) 0%, transparent 65%)' }} />
+        {/* Dual radial glow — red + green */}
+        <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[900px] h-[400px] pointer-events-none" style={{ background: 'radial-gradient(ellipse at center top, hsl(4 90% 58% / 0.10) 0%, transparent 65%)' }} />
+        <div className="absolute top-0 left-1/4 w-[600px] h-[300px] pointer-events-none" style={{ background: `radial-gradient(ellipse at top left, ${GREEN}08 0%, transparent 60%)` }} />
+        <div className="absolute top-1/3 right-0 w-[500px] h-[400px] pointer-events-none" style={{ background: `radial-gradient(ellipse at right, ${VIOLET}05 0%, transparent 60%)` }} />
+        {/* Luxury sparkles */}
+        <HeroSparkles />
 
         <div className="relative z-10 max-w-4xl">
           {/* Version pill */}
-          <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full border mb-8 text-xs font-bold" style={{ borderColor: 'hsl(4 90% 58% / 0.3)', color: RED, background: 'hsl(4 90% 58% / 0.07)' }}>
+          <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full border mb-6 text-xs font-bold" style={{ borderColor: 'hsl(4 90% 58% / 0.3)', color: RED, background: 'hsl(4 90% 58% / 0.07)' }}>
             <span className="w-1.5 h-1.5 rounded-full animate-pulse" style={{ background: RED }} />
             MockJ 4 — Now Live
           </div>
 
-          <h1 className="text-5xl sm:text-6xl lg:text-7xl font-black tracking-tight mb-6" style={{ fontFamily: 'Space Grotesk, sans-serif', lineHeight: 1.05 }}>
-            MockJ AI —{' '}
-            <span style={{ color: RED, textShadow: `0 0 30px hsl(4 90% 58% / 0.5)` }}>Your Voice-Powered</span>
-            <br /> AI Copilot
+          {/* Digital Plug hero tagline */}
+          <div className="mb-3">
+            <span
+              className="inline-block text-4xl sm:text-5xl font-black tracking-tight"
+              style={{
+                fontFamily: 'Space Grotesk, sans-serif',
+                background: `linear-gradient(135deg, ${GREEN}, hsl(142 70% 72%), ${GREEN})`,
+                WebkitBackgroundClip: 'text',
+                WebkitTextFillColor: 'transparent',
+                backgroundClip: 'text',
+                textShadow: 'none',
+                letterSpacing: '-0.01em',
+              }}
+            >
+              Your Digital Plug.
+            </span>
+          </div>
+
+          {/* 3-day free trial hero badge */}
+          <div className="inline-flex items-center gap-2.5 mb-5 px-5 py-2.5 rounded-2xl" style={{ background: `${GREEN}0e`, border: `1.5px solid ${GREEN}66`, boxShadow: `0 0 28px ${GREEN}22` }}>
+            <span className="text-lg">🎉</span>
+            <div className="text-left">
+              <p className="text-sm font-black" style={{ color: GREEN }}>3-Day FREE Trial — No Credit Card</p>
+              <p className="text-[10px]" style={{ color: `${GREEN}88` }}>Full Pro access · Auto-cancels · Zero risk</p>
+            </div>
+            <span className="text-[10px] font-black px-2 py-0.5 rounded-full ml-1" style={{ background: `${GREEN}18`, border: `1px solid ${GREEN}55`, color: GREEN }}>NEW</span>
+          </div>
+
+          <h1 className="text-5xl sm:text-6xl lg:text-7xl font-black tracking-tight mb-5" style={{ fontFamily: 'Space Grotesk, sans-serif', lineHeight: 1.05 }}>
+            <span style={{ color: RED, textShadow: `0 0 30px hsl(4 90% 58% / 0.5)` }}>I Got You.</span>{' '}Meet MockJ —
+            <br />Your Street-Smart AI
           </h1>
-          <p className="text-xl text-muted-foreground max-w-2xl mx-auto mb-10 leading-relaxed">
-            Build websites, create images, write code, automate tasks,
-            and control everything with your voice.
+          <p className="text-xl text-muted-foreground max-w-2xl mx-auto mb-3 leading-relaxed">
+            Bet. MockJ builds websites, generates images, writes code, and
+            drops strategy — all from a text or a voice command. No fluff, just moves.
+          </p>
+          <p className="text-base max-w-xl mx-auto mb-10 font-semibold" style={{ color: 'rgba(200,210,240,0.4)' }}>
+            "Don't overthink it. Just tell Mock what you need and he'll handle it."
           </p>
           <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
+            {/* Primary CTA — MLTX green glow */}
             <button
               onClick={() => navigate('/')}
-              className="flex items-center gap-2 px-8 py-3.5 rounded-2xl text-base font-bold transition-all active:scale-95 hover:scale-[1.03]"
-              style={{ background: `linear-gradient(135deg, ${RED}, hsl(20 90% 55%))`, color: '#fff', boxShadow: `0 4px 30px hsl(4 90% 58% / 0.4)` }}
+              className="relative overflow-hidden flex items-center gap-2 px-8 py-3.5 rounded-2xl text-base font-black transition-all active:scale-95 hover:scale-[1.03] shine-sweep"
+              style={{
+                background: `linear-gradient(135deg, hsl(142 70% 28%), hsl(142 70% 20%))`,
+                color: '#fff',
+                border: `1px solid ${GREEN}66`,
+                boxShadow: `0 4px 30px ${GREEN}44, 0 0 60px ${GREEN}18`,
+              }}
+              onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.boxShadow = `0 4px 40px ${GREEN}66, 0 0 80px ${GREEN}28`; }}
+              onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.boxShadow = `0 4px 30px ${GREEN}44, 0 0 60px ${GREEN}18`; }}
             >
               <Cpu className="w-5 h-5" />
-              Start Using MockJ 4 — Free
+              Say Less — Start Free
             </button>
-            <a href="#features" className="flex items-center gap-2 px-8 py-3.5 rounded-2xl text-base font-semibold border transition-all hover:scale-[1.02]" style={{ borderColor: 'hsl(224 15% 22%)', color: 'hsl(210 20% 80%)' }}>
-              See All Features
+            {/* Secondary CTA */}
+            <a
+              href="#features"
+              className="flex items-center gap-2 px-8 py-3.5 rounded-2xl text-base font-semibold transition-all hover:scale-[1.02]"
+              style={{ background: `${GREEN}0b`, border: `1px solid ${GREEN}33`, color: `${GREEN}cc` }}
+              onMouseEnter={e => { (e.currentTarget as HTMLAnchorElement).style.borderColor = `${GREEN}66`; (e.currentTarget as HTMLAnchorElement).style.boxShadow = `0 0 20px ${GREEN}18`; }}
+              onMouseLeave={e => { (e.currentTarget as HTMLAnchorElement).style.borderColor = `${GREEN}33`; (e.currentTarget as HTMLAnchorElement).style.boxShadow = 'none'; }}
+            >
+              See the Moves
               <ArrowRight className="w-4 h-4" />
             </a>
           </div>
 
-          {/* Social proof */}
-          <div className="flex items-center justify-center gap-6 mt-12 flex-wrap">
-            {['Voice-Controlled', 'Project Memory', 'Unlimited Pro'].map(t => (
+          {/* Feature pills */}
+          <div className="flex items-center justify-center gap-6 mt-8 flex-wrap">
+            {["Voice-Controlled", "Builds Real Stuff", "3-Day Free Trial"].map((t, i) => (
               <div key={t} className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                <Check className="w-3.5 h-3.5" style={{ color: RED }} />
+                <Check className="w-3.5 h-3.5" style={{ color: i === 1 ? GREEN : RED }} />
                 {t}
               </div>
             ))}
+          </div>
+
+          {/* Real-time social proof */}
+          <div className="mt-6">
+            <SocialProofWidget />
           </div>
         </div>
       </section>
@@ -219,10 +412,10 @@ export default function LandingPage() {
           <div className="text-center mb-16">
             <p className="text-xs font-bold uppercase tracking-widest mb-3" style={{ color: RED }}>Capabilities</p>
             <h2 className="text-4xl sm:text-5xl font-black tracking-tight" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>
-              Everything You Need.<br /><span style={{ color: RED }}>One Copilot.</span>
+              Here's the Move.<br /><span style={{ color: RED }}>One Tool. Everything.</span>
             </h2>
             <p className="text-muted-foreground mt-4 max-w-xl mx-auto text-lg">
-              MockJ 4 combines the most powerful AI tools into a seamless, voice-first workflow.
+              MockJ doesn't just chat — he builds, creates, debugs, and strategizes. Real output, not just words.
             </p>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -256,7 +449,7 @@ export default function LandingPage() {
           <div className="text-center mb-16">
             <p className="text-xs font-bold uppercase tracking-widest mb-3" style={{ color: VIOLET }}>Who It's For</p>
             <h2 className="text-4xl sm:text-5xl font-black tracking-tight" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>
-              Built for <span style={{ color: RED }}>Makers</span>
+              Who's Mock For? <span style={{ color: RED }}>You.</span>
             </h2>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -285,7 +478,7 @@ export default function LandingPage() {
           <div className="text-center mb-16">
             <p className="text-xs font-bold uppercase tracking-widest mb-3" style={{ color: RED }}>Pricing</p>
             <h2 className="text-4xl sm:text-5xl font-black tracking-tight" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>
-              Start Free. Go <span style={{ color: RED }}>Unlimited.</span>
+              No Cap Pricing. <span style={{ color: RED }}>Go Unlimited.</span>
             </h2>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-5">
@@ -321,14 +514,14 @@ export default function LandingPage() {
                   ))}
                 </ul>
                 <button
-                  onClick={() => handlePlanClick(plan.name)}
+                  onClick={() => navigate(plan.name === 'Free' ? '/' : '/?pricing=open')}
                   className="w-full py-2.5 rounded-xl text-sm font-bold transition-all active:scale-95"
                   style={plan.highlight
                     ? { background: `linear-gradient(135deg, ${RED}, hsl(20 90% 55%))`, color: '#fff', boxShadow: `0 0 20px hsl(4 90% 58% / 0.3)` }
                     : { background: 'hsl(224 15% 14%)', color: 'hsl(210 20% 80%)', border: '1px solid hsl(224 15% 20%)' }
                   }
                 >
-                  {plan.name === 'Free' ? 'Launch MockJ Free' : `Open ${plan.name} Checkout`}
+                  {plan.name === 'Free' ? 'Get Started Free' : 'Start 3-Day Free Trial'}
                 </button>
               </div>
             ))}
@@ -342,7 +535,7 @@ export default function LandingPage() {
           <div className="text-center mb-16">
             <p className="text-xs font-bold uppercase tracking-widest mb-3" style={{ color: RED }}>FAQ</p>
             <h2 className="text-4xl font-black tracking-tight" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>
-              Common Questions
+              Real Talk — FAQ
             </h2>
           </div>
           {FAQS.map(item => <FAQItem key={item.q} {...item} />)}
@@ -350,23 +543,44 @@ export default function LandingPage() {
       </section>
 
       {/* Final CTA */}
-      <section className="py-24 px-6 border-t border-white/[0.04]">
-        <div className="max-w-3xl mx-auto text-center">
-          <div className="inline-flex items-center gap-2 mb-6 px-4 py-2 rounded-full border text-xs font-bold" style={{ borderColor: 'hsl(4 90% 58% / 0.3)', color: RED, background: 'hsl(4 90% 58% / 0.07)' }}>
+      <section className="relative py-24 px-6 border-t border-white/[0.04] overflow-hidden">
+        {/* Subtle sparkles */}
+        <div className="absolute inset-0 pointer-events-none overflow-hidden">
+          {HERO_SPARKLES.filter((_, i) => i % 3 === 0).map(s => (
+            <div key={s.id} className="sparkle" style={{
+              left: s.left, top: s.top, width: s.size, height: s.size,
+              background: s.color,
+              boxShadow: `0 0 ${s.size * 4}px ${s.color}`,
+              animation: `sparkle-twinkle ${s.dur} ease-in-out infinite`,
+              animationDelay: s.delay, opacity: 0.45,
+            }} />
+          ))}
+        </div>
+        <div className="relative z-10 max-w-3xl mx-auto text-center">
+          <div
+            className="inline-flex items-center gap-2 mb-6 px-4 py-2 rounded-full border text-xs font-bold"
+            style={{ borderColor: `${GREEN}44`, color: GREEN, background: `${GREEN}09`, boxShadow: `0 0 16px ${GREEN}14` }}
+          >
             <Star className="w-3.5 h-3.5" />
-            The AI Copilot Built Different
+            Built Different. No Cap. 🔥
           </div>
           <h2 className="text-4xl sm:text-5xl font-black tracking-tight mb-4" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>
-            Ready to Work Smarter?
+            Don't Overthink It.
+            <br /><span style={{ color: GREEN, textShadow: `0 0 30px ${GREEN}55` }}>Just Do This First.</span>
           </h2>
-          <p className="text-muted-foreground text-lg mb-10">Start free — no credit card required. Upgrade anytime.</p>
+          <p className="text-muted-foreground text-lg mb-2">Say less. Start free. No credit card, no cap.</p>
+          <p className="text-sm font-bold mb-10" style={{ color: 'rgba(200,210,240,0.4)' }}>
+            "That's the clean fix." — MockJ 🔥
+          </p>
           <button
             onClick={() => navigate('/')}
-            className="inline-flex items-center gap-2 px-10 py-4 rounded-2xl text-lg font-black transition-all active:scale-95 hover:scale-[1.03]"
-            style={{ background: `linear-gradient(135deg, ${RED}, hsl(20 90% 55%))`, color: '#fff', boxShadow: `0 6px 40px hsl(4 90% 58% / 0.4)` }}
+            className="relative overflow-hidden inline-flex items-center gap-2 px-10 py-4 rounded-2xl text-lg font-black transition-all active:scale-95 hover:scale-[1.03] shine-sweep"
+            style={{ background: `linear-gradient(135deg, hsl(142 70% 28%), hsl(142 70% 20%))`, color: '#fff', border: `1px solid ${GREEN}66`, boxShadow: `0 6px 40px ${GREEN}44, 0 0 80px ${GREEN}18` }}
+            onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.boxShadow = `0 6px 50px ${GREEN}66, 0 0 100px ${GREEN}28`; }}
+            onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.boxShadow = `0 6px 40px ${GREEN}44, 0 0 80px ${GREEN}18`; }}
           >
             <Cpu className="w-5 h-5" />
-            Launch MockJ 4 Free
+            Let's Get It — Launch MockJ Free
           </button>
         </div>
       </section>
@@ -378,9 +592,12 @@ export default function LandingPage() {
             <div className="w-6 h-6 rounded overflow-hidden">
               <img src={logoImg} alt="MockJ" className="w-full h-full object-cover" />
             </div>
+          <div className="flex flex-col items-start">
             <span className="font-black text-sm" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>
               MockJ <span style={{ color: RED }}>4</span>
             </span>
+            <span className="text-[8px] font-bold uppercase tracking-widest" style={{ color: 'hsl(142 70% 55% / 0.55)' }}>Your Digital Plug</span>
+          </div>
           </div>
           <nav className="flex items-center gap-5 text-xs text-muted-foreground">
             <a href="/ai-copilot" className="hover:text-foreground transition-colors">AI Copilot</a>
@@ -388,11 +605,15 @@ export default function LandingPage() {
             <a href="/ai-image-generator" className="hover:text-foreground transition-colors">Image AI</a>
             <a href="/ai-coding-assistant" className="hover:text-foreground transition-colors">Code AI</a>
           </nav>
-          <p className="text-xs text-muted-foreground/50">© 2025 MockJ · Built Different 🔥</p>
+          <div className="flex items-center gap-4 text-xs text-muted-foreground/50">
+            <a href="/terms" className="hover:text-foreground transition-colors">Terms of Service</a>
+            <span className="opacity-40">·</span>
+            <a href="/privacy" className="hover:text-foreground transition-colors">Privacy Policy</a>
+            <span className="opacity-40">·</span>
+            <span>© 2025 MockJ · Built Different 🔥</span>
+          </div>
         </div>
       </footer>
-
-      {showPricing && <PricingModal onClose={() => setShowPricing(false)} />}
     </div>
   );
 }

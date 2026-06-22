@@ -3,49 +3,53 @@ import {
   Image, Download, RefreshCw, Sparkles, Zap, Star, Upload, X, Wand2,
   Mic, MicOff, Shield, Droplets, User, Layers, Move, Crown,
   CheckCircle2, Lock, Award, ChevronDown, ChevronUp, History, Trash2,
-  ZoomIn, Clock, Maximize2, LogIn, Coins,
+  ZoomIn, Clock, Maximize2, Camera, Coins, AlertTriangle,
 } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import PhotoRecreator from '@/components/features/PhotoRecreator';
+import { useTokenWallet } from '@/hooks/useTokenWallet';
+import { useAuth } from '@/contexts/AuthContext';
+import { supabase } from '@/lib/supabase';
+import { Analytics } from '@/lib/analytics';
+import { normalizeCreativePrompt } from '@/lib/promptNormalizer';
 import { ImageGenRequest } from '@/types/chat';
 import { generateImage } from '@/lib/mockAI';
 import { saveImageGeneration, loadImageHistory, deleteImageGeneration, ImageHistoryItem } from '@/lib/storage';
-import PricingModal from '@/components/features/PricingModal';
-import { useAuth } from '@/contexts/AuthContext';
-import { useUsageLimits } from '@/hooks/useUsageLimits';
-import { useTokenWallet } from '@/hooks/useTokenWallet';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 
-type PanelMode = 'generate' | 'edit' | 'history' | 'photo';
+type PanelMode = 'generate' | 'edit' | 'history' | 'recreator';
 
-interface ImageGeneratorPanelProps {
-  initialMode?: PanelMode;
+// ── AI Model registry — all available OnSpace image models ───────────────────
+interface AIImageModel {
+  id: string;
+  label: string;
+  badge: string;
+  color: string;
+  desc: string;
+  supportsEdit: boolean;
 }
 
-const MOREIRAJ_STYLE_CODE = 'MJELTXSJ777111';
-const MOREIRAJ_STYLE_RE = /\b(moreiraj|mjel|fashion|outfit|lookbook|wardrobe|streetwear|couture|runway|style build|image build|editorial|boudoir|lingerie|glamour|glamor|portrait prompt)\b/i;
-const ADULT_EDITORIAL_RE = /\b(adult editorial|boudoir|lingerie|sensual|intimate portrait|glamour|glamor|swimwear|pinup|tasteful adult)\b/i;
-const ADULT_EDITORIAL_GUARDRAIL =
-  'tasteful adult editorial, 21+ adult model, non-explicit, fashion-forward, consent-aware, no nudity, no sexual act, premium magazine lighting';
+const AI_IMAGE_MODELS: AIImageModel[] = [
+  { id: 'google/gemini-3.1-flash-image-preview', label: 'Gemini 3.1 Flash', badge: '⚡ Fastest',    color: 'hsl(191 97% 55%)', desc: 'Ultra-fast generations, great for rapid iteration',      supportsEdit: true  },
+  { id: 'google/gemini-2.5-flash-image',         label: 'Gemini 2.5 Flash', badge: '🔥 Balanced',  color: 'hsl(38 95% 60%)',  desc: 'Balanced speed & quality, excellent all-rounder',      supportsEdit: true  },
+  { id: 'google/gemini-3-pro-image-preview',     label: 'Gemini 3 Pro',     badge: '👑 Pro Quality', color: 'hsl(265 80% 65%)', desc: 'Highest quality output, best for final renders',        supportsEdit: true  },
+];
 
-function applyMoreiraJStyleCode(prompt: string) {
-  if (!MOREIRAJ_STYLE_RE.test(prompt) || prompt.includes(MOREIRAJ_STYLE_CODE)) {
-    return prompt;
-  }
+const DEFAULT_MODEL_ID = 'google/gemini-3.1-flash-image-preview';
 
-  return `${prompt}, ${MOREIRAJ_STYLE_CODE}`;
-}
-
-function applyAdultEditorialGuardrails(prompt: string) {
-  if (!ADULT_EDITORIAL_RE.test(prompt) || /non-explicit|no nudity|21\+ adult/i.test(prompt)) {
-    return prompt;
-  }
-
-  return `${prompt}, ${ADULT_EDITORIAL_GUARDRAIL}`;
-}
+// ── Enhancement presets — append to prompt when selected ─────────────────────
+const ENHANCEMENT_PRESETS = [
+  { id: 'cinematic',    label: '🎬 Cinematic',    keyword: 'cinematic lighting, dramatic atmosphere, film grain, anamorphic lens flare',      color: 'hsl(265 80% 65%)', tooltip: 'Adds dramatic shadows, film grain, and anamorphic lens flares for a Hollywood blockbuster look.' },
+  { id: 'golden_hour', label: '🌅 Golden Hour',   keyword: 'golden hour lighting, warm sunset tones, long shadows, soft bokeh',              color: 'hsl(38 95% 60%)',  tooltip: 'Wraps the scene in warm sunset tones with long golden shadows and silky background bokeh.' },
+  { id: 'studio_lit',  label: '💡 Studio Lit',    keyword: 'professional studio lighting, clean white background, sharp detail, commercial', color: 'hsl(191 97% 55%)', tooltip: 'Applies crisp professional studio lighting on a clean background for a polished commercial finish.' },
+  { id: 'dark_moody',  label: '🌑 Dark Moody',    keyword: 'dark moody atmosphere, deep shadows, chiaroscuro lighting, noir aesthetic',       color: 'hsl(224 20% 55%)', tooltip: 'Creates deep shadows and high-contrast noir lighting for a brooding, mysterious atmosphere.' },
+  { id: 'vivid',       label: '🎨 Vivid Colors',  keyword: 'ultra vivid saturated colors, vibrant palette, high contrast, HDR look',         color: 'hsl(142 70% 55%)', tooltip: 'Pumps up saturation and contrast for an eye-popping, ultra-vivid HDR color burst.' },
+  { id: 'vintage',     label: '📷 Vintage Film',  keyword: 'vintage film aesthetic, analog grain, faded tones, light leak, Kodachrome look', color: 'hsl(22 90% 58%)',  tooltip: 'Adds analog grain, faded tones, and light leaks for a retro Kodachrome film aesthetic.' },
+] as const;
+type PresetId = typeof ENHANCEMENT_PRESETS[number]['id'];
 
 const STYLES: { value: ImageGenRequest['style']; label: string; emoji: string; desc: string }[] = [
-  { value: 'realistic',  label: 'Realistic',   emoji: '📷', desc: 'Photo-real' },
+  { value: 'realistic',  label: 'Realistic',   emoji: '📷', desc: 'Ultra photo-real' },
   { value: 'artistic',   label: 'Artistic',    emoji: '🎨', desc: 'Fine art' },
   { value: 'anime',      label: 'Anime',       emoji: '✨', desc: 'Japanese' },
   { value: 'sketch',     label: 'Sketch',      emoji: '✏️', desc: 'Hand-drawn' },
@@ -63,25 +67,10 @@ const RATIOS: { value: ImageGenRequest['aspectRatio']; label: string; desc: stri
 ];
 
 const QUALITY_OPTIONS = [
-  { value: '1K', label: 'Standard', icon: Zap,   desc: 'Fast · Good' },
-  { value: '2K', label: 'HD',       icon: Star,  desc: 'Balanced · Great' },
-  { value: '4K', label: 'Ultra',    icon: Crown, desc: 'Slow · Best', pro: true },
+  { value: '1K', label: 'Standard', icon: Zap,   desc: 'Fast · Good',    pro: false },
+  { value: '2K', label: 'HD',       icon: Star,  desc: 'Balanced · Great', pro: true },
+  { value: '4K', label: 'Ultra',    icon: Crown, desc: 'Slow · Best',    pro: true },
 ];
-
-const IMAGE_MODEL_VERSIONS = [
-  { value: 'gemini-2.5-flash-image', label: 'MockJ Native', source: 'MLTXPRO', desc: 'Fast MLTXPRO image engine' },
-  { value: 'hf-flux-dev', label: 'MockJ Detail', source: 'MLTXPRO', desc: 'High-detail premium renders' },
-  { value: 'hf-flux-schnell', label: 'MockJ Draft', source: 'MLTXPRO', desc: 'Fast drafts and iteration' },
-  { value: 'hf-sdxl', label: 'MockJ Balanced', source: 'MLTXPRO', desc: 'Balanced creative image model' },
-  { value: 'hf-sd35-large', label: 'MockJ Editorial', source: 'MLTXPRO', desc: 'Detailed photoreal/editorial output' },
-  { value: 'hf-playground-v25', label: 'MockJ Social', source: 'MLTXPRO', desc: 'Polished social graphics' },
-  { value: 'hf-dreamshaper-xl', label: 'MockJ Fantasy', source: 'MLTXPRO', desc: 'Fantasy and concept art' },
-  { value: 'hf-realvis-xl', label: 'MockJ Real', source: 'MLTXPRO', desc: 'Natural portraits and products' },
-  { value: 'hf-openjourney', label: 'MockJ Cinema', source: 'MLTXPRO', desc: 'Cinematic concept look' },
-  { value: 'hf-kandinsky-3', label: 'MockJ Expressive', source: 'MLTXPRO', desc: 'Expressive art direction' },
-] as const;
-
-type ImageModelVersion = (typeof IMAGE_MODEL_VERSIONS)[number]['value'];
 
 const GENERATE_PROMPTS = [
   'A neon-lit Tokyo street in heavy rain, cyberpunk aesthetic',
@@ -97,13 +86,6 @@ const EDIT_PROMPTS = [
   'Make it look like a hand-painted watercolor artwork',
   'Add glowing neon accents and cyberpunk atmosphere',
   'Change to nighttime with glowing city lights reflected',
-];
-
-const PHOTO_PROMPTS = [
-  'Enhance this photo with natural skin tones and clean studio lighting',
-  'Restore detail, improve sharpness, and balance the color grade',
-  'Create a polished editorial portrait while keeping the person recognizable',
-  'Remove harsh shadows and make this look like a premium product photo',
 ];
 
 const LOADING_MESSAGES = [
@@ -152,25 +134,23 @@ function useVoiceInput(onTranscript: (t: string) => void) {
     rec.onend = () => setListening(false);
     rec.onerror = () => { setListening(false); toast.error('Voice input failed.'); };
     rec.start(); recRef.current = rec; setListening(true);
+    Analytics.featureUsed('voice_input', 'image_studio');
   }, [supported, onTranscript]);
 
   const stop = useCallback(() => { recRef.current?.stop(); setListening(false); }, []);
   return { listening, supported, start, stop };
 }
 
-export default function ImageGeneratorPanel({ initialMode = 'generate' }: ImageGeneratorPanelProps) {
-  const navigate = useNavigate();
-  const { user, subscription } = useAuth();
-  const { consumeOrBlock, getRemaining, getLimitLabel } = useUsageLimits();
-  const { tokenBalance, tokenCosts, canSpendTokens, spendTokens } = useTokenWallet();
-  const [panelMode, setPanelMode] = useState<PanelMode>(initialMode);
+export default function ImageGeneratorPanel() {
+  const [panelMode, setPanelMode] = useState<PanelMode>('generate');
 
   const [prompt, setPrompt]   = useState('');
   const [style, setStyle]     = useState<ImageGenRequest['style']>('realistic');
+  const [activePresets, setActivePresets] = useState<Set<PresetId>>(new Set());
   const [ratio, setRatio]     = useState<ImageGenRequest['aspectRatio']>('1:1');
   const [quality, setQuality] = useState('1K');
-  const [modelVersion, setModelVersion] = useState<ImageModelVersion>('gemini-2.5-flash-image');
-  const [showPricing, setShowPricing] = useState(false);
+  const [selectedModelId, setSelectedModelId] = useState(DEFAULT_MODEL_ID);
+  const [showModelPicker, setShowModelPicker] = useState(false);
 
   const [charConsistency, setCharConsistency] = useState(false);
   const [facePreservation, setFacePreservation] = useState(false);
@@ -186,10 +166,15 @@ export default function ImageGeneratorPanel({ initialMode = 'generate' }: ImageG
   const [editPrompt, setEditPrompt]     = useState('');
   const [sourceImage, setSourceImage]   = useState<string | null>(null);
   const [sourceFileName, setSourceFileName] = useState('');
+  // Reference image for Generate mode (img2img from generate tab)
+  const [refImage, setRefImage]         = useState<string | null>(null);
+  const [refFileName, setRefFileName]   = useState('');
+  const refFileInputRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging]         = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [loading, setLoading]           = useState(false);
+  const [isRetrying, setIsRetrying]     = useState(false);
   const [loadingMsgIdx, setLoadingMsgIdx] = useState(0);
   const [result, setResult]             = useState<string | null>(null);
   const [resultPrompt, setResultPrompt] = useState('');
@@ -263,14 +248,84 @@ export default function ImageGeneratorPanel({ initialMode = 'generate' }: ImageG
     }
   }, []);
 
+  // Listen for silent retry signal from generateImage()
+  useEffect(() => {
+    const handler = () => { setIsRetrying(true); };
+    window.addEventListener('mockj:image-retry', handler);
+    return () => window.removeEventListener('mockj:image-retry', handler);
+  }, []);
+
+  // Free image counter for the day
+  const [todayImageCount, setTodayImageCount] = useState<number | null>(null);
+  const FREE_DAILY_IMAGES = 3;
+
+  // Token wallet and subscription state
+  const { wallet } = useTokenWallet();
+  const { user, subscription } = useAuth();
+  const isSubscribed = subscription?.subscribed ?? false;
+  const tokenCost = ['2K', '4K', 'HD'].includes(quality) ? 100 : 50;
+
+  // Upgrade banner state for locked quality
+  const [showQualityUpgrade, setShowQualityUpgrade] = useState(false);
+  const hasSufficientBalance = isSubscribed || wallet.balance >= tokenCost;
+
+  // Toggle enhancement preset: appends/removes keyword from prompt
+  const togglePreset = useCallback((preset: typeof ENHANCEMENT_PRESETS[number]) => {
+    setActivePresets(prev => {
+      const next = new Set(prev);
+      if (next.has(preset.id)) {
+        // Remove keyword from prompt
+        next.delete(preset.id);
+        setPrompt(p => p.replace(new RegExp(',?\\s*' + preset.keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'), '').replace(/^,\s*/, '').trim());
+      } else {
+        // Append keyword to prompt
+        next.add(preset.id);
+        setPrompt(p => p ? `${p}, ${preset.keyword}` : preset.keyword);
+      }
+      return next;
+    });
+  }, []);
+
   const voiceGenerate = useVoiceInput(t => setPrompt(p => p ? `${p} ${t}` : t));
   const voiceEdit     = useVoiceInput(t => setEditPrompt(p => p ? `${p} ${t}` : t));
   const voice = panelMode === 'generate' ? voiceGenerate : voiceEdit;
-  const referenceMode = panelMode === 'edit' || panelMode === 'photo';
 
+  // Fetch today's image count for free counter badge
   useEffect(() => {
-    setPanelMode(initialMode);
-  }, [initialMode]);
+    if (isSubscribed) return; // skip for Pro users
+    const fetchTodayCount = async () => {
+      const today = new Date().toISOString().slice(0, 10);
+      if (user) {
+        // Authenticated: query server
+        const { data } = await supabase.from('user_daily_usage')
+          .select('image_count')
+          .eq('user_id', user.id)
+          .eq('date', today)
+          .maybeSingle();
+        setTodayImageCount(data?.image_count ?? 0);
+      } else {
+        // Guest: read from localStorage (useUsageLimits key)
+        const raw = localStorage.getItem(`mockj_daily_usage_`);
+        // Search for any key containing today's date
+        let count = 0;
+        for (let i = 0; i < localStorage.length; i++) {
+          const k = localStorage.key(i);
+          if (k?.startsWith('mockj_daily_usage_')) {
+            try {
+              const parsed = JSON.parse(localStorage.getItem(k) ?? '{}');
+              if (parsed.date === today) { count = parsed.image ?? 0; break; }
+            } catch { /* ignore */ }
+          }
+        }
+        setTodayImageCount(count);
+      }
+    };
+    fetchTodayCount();
+    // Refetch after a generation
+    const handler = () => setTimeout(fetchTodayCount, 1000);
+    window.addEventListener('mockj:tokens-spent', handler);
+    return () => window.removeEventListener('mockj:tokens-spent', handler);
+  }, [isSubscribed, user]);
 
   useEffect(() => {
     if (panelMode !== 'history') return;
@@ -278,17 +333,28 @@ export default function ImageGeneratorPanel({ initialMode = 'generate' }: ImageG
     loadImageHistory().then(items => { setHistoryItems(items); setHistoryLoading(false); });
   }, [panelMode]);
 
-  const loadFile = useCallback((file: File) => {
-    if (file.size > 8 * 1024 * 1024) { setError('Image must be under 8MB'); return; }
+  const loadFile = useCallback((file: File, target: 'source' | 'ref' = 'source') => {
+    if (file.size > 20 * 1024 * 1024) { setError('Image must be under 20MB'); return; }
     if (!file.type.startsWith('image/')) { setError('Please upload an image file'); return; }
-    setSourceFileName(file.name);
     const reader = new FileReader();
-    reader.onload = () => { setSourceImage(reader.result as string); setError(null); };
+    reader.onload = () => {
+      if (target === 'ref') {
+        setRefImage(reader.result as string);
+        setRefFileName(file.name);
+      } else {
+        setSourceImage(reader.result as string);
+        setSourceFileName(file.name);
+      }
+      setError(null);
+    };
     reader.readAsDataURL(file);
   }, []);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]; if (file) loadFile(file);
+    const file = e.target.files?.[0]; if (file) loadFile(file, 'source');
+  };
+  const handleRefFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]; if (file) loadFile(file, 'ref');
   };
 
   const handleDragOver  = (e: React.DragEvent) => { e.preventDefault(); setDragging(true); };
@@ -296,90 +362,116 @@ export default function ImageGeneratorPanel({ initialMode = 'generate' }: ImageG
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault(); setDragging(false);
     const file = e.dataTransfer.files?.[0];
-    if (file) { loadFile(file); if (panelMode === 'generate' || panelMode === 'history') setPanelMode('photo'); }
+    if (!file) return;
+    if (panelMode === 'generate') {
+      loadFile(file, 'ref');
+    } else {
+      loadFile(file, 'source');
+    }
   };
 
   const clearSource = () => {
     setSourceImage(null); setSourceFileName('');
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
+  const clearRef = () => {
+    setRefImage(null); setRefFileName('');
+    if (refFileInputRef.current) refFileInputRef.current.value = '';
+  };
 
   const handleGenerate = async (overridePrompt?: string, overrideStyle?: ImageGenRequest['style'], overrideRatio?: ImageGenRequest['aspectRatio'], overrideQuality?: string) => {
-    const activePrompt = (overridePrompt ?? (panelMode === 'generate' ? prompt : editPrompt)).trim();
+    const activePrompt = overridePrompt ?? (panelMode === 'generate' ? prompt : editPrompt).trim();
     if (!activePrompt || loading) return;
-    if (referenceMode && !sourceImage) return;
+    if (panelMode === 'edit' && !sourceImage && !overridePrompt) return;
+
+    // Block if we know balance is insufficient (skip check while wallet is still loading)
+    if (!isSubscribed && !wallet.loading && wallet.balance < tokenCost) {
+      toast.error(`Need ${tokenCost} tokens to generate — top up first`, {
+        action: { label: 'Token Shop', onClick: () => window.location.href = '/tokens' },
+      });
+      return;
+    }
 
     const useStyle   = overrideStyle   ?? style;
     const useRatio   = overrideRatio   ?? ratio;
     const useQuality = overrideQuality ?? quality;
 
-    if (!user) {
-      toast.error('Create a free MockJ account to use Image Studio and MLTX tokens.');
-      navigate('/auth?mode=signup');
-      return;
-    }
-
-    if (!subscription.subscribed && useQuality === '4K') {
-      toast.error('Ultra 4K image output is a Pro option. Subscribe monthly to unlock it.');
-      setShowPricing(true);
-      return;
-    }
-
-    if (!subscription.subscribed && getRemaining('image') <= 0) {
-      toast.error('You used all 10 free images for today. Subscribe monthly to keep generating.');
-      setShowPricing(true);
-      return;
-    }
-
-    if (!subscription.subscribed && !canSpendTokens('image')) {
-      toast.error(`Not enough MLTX tokens. ${tokenCosts.image} needed for image generation.`);
-      setShowPricing(true);
-      return;
-    }
-
     setLoading(true); setResult(null); setError(null);
     setResultPrompt(activePrompt); setLoadingMsgIdx(0);
 
-    const msgs = referenceMode ? EDIT_LOADING_MESSAGES : LOADING_MESSAGES;
+    const msgs = panelMode === 'edit' ? EDIT_LOADING_MESSAGES : LOADING_MESSAGES;
     const iv = setInterval(() => setLoadingMsgIdx(i => (i + 1) % msgs.length), 2500);
 
-    const enhancedPrompt = applyAdultEditorialGuardrails(applyMoreiraJStyleCode(activePrompt));
+    // Normalize prompt: multilingual, spell-correct, enhance — never block on failure
+    let finalPrompt = activePrompt;
+    try {
+      const normalized = await normalizeCreativePrompt(activePrompt, 'image');
+      if (normalized.safetyStatus === 'unsafe') {
+        clearInterval(iv);
+        setLoading(false);
+        setError(`This prompt isn't allowed: ${normalized.safetyReason ?? 'content policy violation'}`);
+        return;
+      }
+      finalPrompt = normalized.finalPromptForGeneration || activePrompt;
+    } catch { /* fallback to original */ }
+
+    let enhancedPrompt = finalPrompt;
+    if (charConsistency) enhancedPrompt += ', maintain consistent character identity and facial features throughout';
+    if (facePreservation) enhancedPrompt += ', preserve and protect facial identity exactly';
+    if (addWatermark) enhancedPrompt += ', add subtle watermark';
+    // Always append realism booster for realistic style in generate mode
+    if (useStyle === 'realistic' && panelMode === 'generate') {
+      enhancedPrompt += ', hyperrealistic, 8K, professional photography, no AI artifacts';
+    }
+
+    // For generate mode with a reference image, treat as img2img
+    const sourceForRequest =
+      panelMode === 'edit' ? (sourceImage ?? undefined)
+      : panelMode === 'generate' && refImage ? refImage
+      : undefined;
 
     try {
+      console.log('[MockJ Studio] Calling generateImage…', { prompt: enhancedPrompt.slice(0, 60), useStyle, useRatio, useQuality });
       const url = await generateImage({
         prompt: enhancedPrompt,
         style: useStyle,
         aspectRatio: useRatio,
         quality: useQuality,
-        modelVersion,
-        sourceImageDataUrl: referenceMode ? (sourceImage ?? undefined) : undefined,
-        charConsistency,
-        facePreservation,
-        addWatermark,
-        privateMode,
+        sourceImageDataUrl: sourceForRequest,
+        modelId: selectedModelId,
       });
+      Analytics.imageSent();
       setResult(url);
-      if (privateMode) {
-        toast.success('Private image generated. It was not saved to history.');
-      } else {
-        saveImageGeneration({
-          prompt: activePrompt,
-          style: useStyle,
-          aspectRatio: useRatio,
-          quality: useQuality,
-          mode: referenceMode ? 'edit' : 'generate',
-          imageUrl: url,
-        });
-      }
-      if (!subscription.subscribed) {
-        consumeOrBlock('image');
-        spendTokens('image');
-      }
+      // Notify wallet hook to refetch immediately — no need to wait for 60s poll
+      window.dispatchEvent(new CustomEvent('mockj:tokens-spent'));
+      saveImageGeneration({
+        prompt: activePrompt,
+        style: useStyle,
+        aspectRatio: useRatio,
+        quality: useQuality,
+        mode: (panelMode === 'history' ? 'generate' : panelMode) as 'generate' | 'edit',
+        imageUrl: url,
+      });
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Generation failed. Please try again.');
+      const e = err as Error & { tokenShortfall?: boolean; required?: number; balance?: number; limitExceeded?: boolean };
+      if (e.tokenShortfall) {
+        setError(`Not enough tokens (need ${e.required ?? tokenCost}, have ${e.balance ?? wallet.balance}). Top up in the Token Shop.`);
+        // Dispatch event so parent (Index) can open the LowTokensModal
+        window.dispatchEvent(new CustomEvent('mockj:low-tokens', {
+          detail: { required: e.required ?? tokenCost, balance: e.balance ?? wallet.balance },
+        }));
+      } else if (e.limitExceeded) {
+        setError(e.message || 'Daily limit reached. Upgrade to MockJ Pro.');
+        toast.error(e.message || 'Daily limit reached.');
+      } else {
+        setError(e.message || 'Generation failed. Please try again.');
+        toast.error('Image generation failed — check console for details');
+        console.error('[MockJ Studio] generateImage error:', err);
+      }
     } finally {
       clearInterval(iv);
       setLoading(false);
+      setIsRetrying(false);
     }
   };
 
@@ -390,86 +482,21 @@ export default function ImageGeneratorPanel({ initialMode = 'generate' }: ImageG
     a.href = href; a.download = `mockj-studio-${Date.now()}.png`; a.target = '_blank'; a.click();
   };
 
-  const switchMode = (mode: PanelMode) => {
-    setPanelMode(mode);
-    setResult(null);
-    setError(null);
-    if (mode === 'photo') {
-      setEditPrompt(p => p || PHOTO_PROMPTS[0]);
-    }
-  };
-
-  const openReferencePicker = (mode: 'edit' | 'photo' = 'edit') => {
-    switchMode(mode);
-    window.setTimeout(() => fileInputRef.current?.click(), 0);
-  };
-
-  const handleFeatureClick = (label: string) => {
-    switch (label) {
-      case 'Voice Commands':
-        if (panelMode === 'history') {
-          switchMode('generate');
-          voiceGenerate.start();
-          return;
-        }
-        voice.listening ? voice.stop() : voice.start();
-        break;
-      case 'Reference Images':
-        openReferencePicker('edit');
-        break;
-      case 'Image-to-Image':
-        openReferencePicker('photo');
-        break;
-      case 'Character Consistency':
-        setCharConsistency(v => !v);
-        setShowAdvanced(true);
-        toast.success('Character consistency toggled.');
-        break;
-      case 'Face Preservation':
-        setFacePreservation(v => !v);
-        setShowAdvanced(true);
-        if (panelMode === 'generate') switchMode('photo');
-        toast.success('Face preservation toggled.');
-        break;
-      case 'Pose Reference':
-        setEditPrompt('Match the pose and composition from the reference image while keeping the subject natural.');
-        openReferencePicker('edit');
-        break;
-      case 'Style Transfer':
-        setEditPrompt('Apply this image style to a polished MockJ creator image.');
-        openReferencePicker('edit');
-        break;
-      case 'Private Workspace':
-        setPrivateMode(v => !v);
-        setShowAdvanced(true);
-        toast.success('Private workspace toggled.');
-        break;
-      case 'Watermark Control':
-        setAddWatermark(v => !v);
-        setShowAdvanced(true);
-        toast.success('Watermark control toggled.');
-        break;
-      case 'Commercial License':
-        toast.success('Commercial license is included for generated images.');
-        break;
-      default:
-        break;
-    }
-  };
-
   const aspectVisual = RATIOS.find(r => r.value === ratio);
-  const selectedModel = IMAGE_MODEL_VERSIONS.find(m => m.value === modelVersion) ?? IMAGE_MODEL_VERSIONS[0];
-  const msgs = referenceMode ? EDIT_LOADING_MESSAGES : LOADING_MESSAGES;
+  const msgs = panelMode === 'edit' ? EDIT_LOADING_MESSAGES : LOADING_MESSAGES;
   const canSubmit = panelMode === 'generate'
     ? !!prompt.trim() && !loading
-    : referenceMode
+    : panelMode === 'edit'
     ? !!editPrompt.trim() && !!sourceImage && !loading
     : false;
+
+  // Show reference indicator on generate tab result
+  const generateHasRef = panelMode === 'generate' && !!refImage;
 
   return (
     <>
     <div
-      className="flex flex-col md:flex-row h-full overflow-y-auto md:overflow-hidden"
+      className="flex flex-col md:flex-row h-full w-full overflow-y-auto md:overflow-hidden"
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
@@ -485,124 +512,174 @@ export default function ImageGeneratorPanel({ initialMode = 'generate' }: ImageG
             </div>
             <div>
               <h2 className="font-black text-sm text-foreground leading-tight" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>
-                MOCKJ <span style={{ color: 'hsl(4 90% 58%)' }}>IMAGE STUDIO</span>
+                MOCKJ <span style={{ color: 'hsl(4 90% 58%)' }}>AI STUDIO</span>
               </h2>
-              <p className="text-[10px] text-muted-foreground">MoreiraJ style lock · {MOREIRAJ_STYLE_CODE}</p>
+              <p className="text-[10px] text-muted-foreground">Create Anything. Control Everything.</p>
             </div>
           </div>
 
           {/* Mode Toggle */}
-          <div className="flex rounded-xl border border-border overflow-hidden p-1 bg-[hsl(224_15%_9%)] gap-1">
-            {(['generate', 'edit', 'history', 'photo'] as PanelMode[]).map(m => (
+          <div className="flex rounded-xl border border-border overflow-hidden p-1 bg-[hsl(224_15%_9%)] gap-1 flex-wrap">
+            {(['generate', 'edit', 'history', 'recreator'] as PanelMode[]).map(m => (
               <button
                 key={m}
-                onClick={() => switchMode(m)}
+                onClick={() => { setPanelMode(m); setResult(null); setError(null); }}
                 className={cn(
-                  'flex-1 flex items-center justify-center gap-1 py-2 rounded-lg text-[11px] font-medium transition-all duration-200',
+                  'flex-1 flex items-center justify-center gap-1 py-2 rounded-lg text-[11px] font-medium transition-all duration-200 min-w-[60px]',
                   panelMode === m
-                    ? 'bg-[hsl(265_80%_65%_/_0.15)] border border-[hsl(265_80%_65%_/_0.4)] text-[hsl(265_80%_65%)]'
+                    ? m === 'recreator'
+                      ? 'bg-[hsl(4_90%_58%_/_0.15)] border border-[hsl(4_90%_58%_/_0.4)] text-[hsl(4_90%_58%)]'
+                      : 'bg-[hsl(265_80%_65%_/_0.15)] border border-[hsl(265_80%_65%_/_0.4)] text-[hsl(265_80%_65%)]'
                     : 'text-muted-foreground hover:text-foreground'
                 )}
               >
-                {m === 'generate' ? <><Sparkles className="w-3 h-3" /> Generate</>
-                  : m === 'edit'  ? <><Wand2    className="w-3 h-3" /> Edit</>
-                  : m === 'history' ? <><History  className="w-3 h-3" /> History</>
-                  :                  <><Image className="w-3 h-3" /> Photo</>}
+                {m === 'generate'  ? <><Sparkles className="w-3 h-3" /> Generate</>
+                  : m === 'edit'   ? <><Wand2    className="w-3 h-3" /> Edit</>
+                  : m === 'history'? <><History  className="w-3 h-3" /> History</>
+                  :                  <><Camera   className="w-3 h-3" /> Photo</>}
               </button>
             ))}
           </div>
 
-          {/* Access / Credits */}
-          {panelMode !== 'history' && (
-            <div className={cn(
-              'rounded-xl border p-3 space-y-2',
-              user
-                ? 'border-[hsl(265_80%_65%_/_0.25)] bg-[hsl(265_80%_65%_/_0.05)]'
-                : 'border-[hsl(4_90%_58%_/_0.35)] bg-[hsl(4_90%_58%_/_0.08)]'
-            )}>
-              {!user ? (
-                <>
-                  <div className="flex items-center gap-2">
-                    <Lock className="w-3.5 h-3.5 text-[hsl(4_90%_58%)]" />
-                    <p className="text-xs font-semibold text-foreground">Sign in required</p>
-                  </div>
-                  <p className="text-[10px] text-muted-foreground leading-relaxed">
-                    Image generation is account-only. Free accounts get 10 image credits, then monthly Pro unlocks more.
-                  </p>
-                  <button
-                    onClick={() => navigate('/auth')}
-                    className="w-full flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold text-white bg-[hsl(4_90%_58%)] hover:opacity-90 transition-all"
-                  >
-                    <LogIn className="w-3 h-3" /> Sign in / Create account
-                  </button>
-                </>
-              ) : subscription.subscribed ? (
-                <div className="flex items-center gap-2">
-                  <Crown className="w-3.5 h-3.5 text-[hsl(38_95%_60%)]" />
-                  <div>
-                    <p className="text-xs font-semibold text-foreground">MockJ Pro active</p>
-                    <p className="text-[10px] text-muted-foreground">Monthly subscriber image access is unlocked.</p>
-                  </div>
-                </div>
-              ) : (
-                <>
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="flex items-center gap-2 min-w-0">
-                      <Coins className="w-3.5 h-3.5 text-[hsl(38_95%_60%)] shrink-0" />
-                      <div className="min-w-0">
-                        <p className="text-xs font-semibold text-foreground">{getLimitLabel('image')}</p>
-                        <p className="text-[10px] text-muted-foreground">{tokenBalance.toLocaleString()} MLTX tokens · {tokenCosts.image} per image</p>
-                      </div>
-                    </div>
-                    <button
-                      onClick={() => setShowPricing(true)}
-                      className="shrink-0 px-2.5 py-1.5 rounded-lg text-[10px] font-semibold border border-[hsl(4_90%_58%_/_0.45)] text-[hsl(4_90%_58%)] bg-[hsl(4_90%_58%_/_0.08)] hover:bg-[hsl(4_90%_58%_/_0.16)] transition-all"
-                    >
-                      Subscribe
-                    </button>
-                  </div>
-                </>
-              )}
-            </div>
-          )}
-
           {/* GENERATE MODE */}
           {panelMode === 'generate' && (
-            <div className="space-y-2">
-              <label className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest">Describe your image</label>
-              <div className="relative">
-                <textarea
-                  value={prompt}
-                  onChange={e => setPrompt(e.target.value)}
-                  placeholder="A majestic wolf howling at the moon over snow-capped peaks…"
-                  rows={4}
-                  className="w-full bg-[hsl(224_15%_9%)] border border-border rounded-xl px-3.5 py-3 pr-10 text-sm text-foreground placeholder:text-muted-foreground/40 outline-none resize-none focus:border-[hsl(265_80%_65%_/_0.5)] transition-all duration-200 leading-relaxed"
-                />
-                <button
-                  onClick={voice.listening ? voice.stop : voice.start}
-                  className={cn(
-                    'absolute right-2.5 bottom-2.5 w-7 h-7 rounded-lg flex items-center justify-center transition-all duration-200',
-                    voice.listening
-                      ? 'bg-[hsl(0_70%_55%_/_0.15)] border border-[hsl(0_70%_55%_/_0.5)] text-[hsl(0_70%_55%)] animate-pulse'
-                      : 'bg-[hsl(191_97%_55%_/_0.1)] border border-[hsl(191_97%_55%_/_0.3)] text-[hsl(191_97%_55%)] hover:bg-[hsl(191_97%_55%_/_0.18)]'
-                  )}
-                  title={voice.listening ? 'Stop recording' : 'Voice input'}
-                >
-                  {voice.listening ? <MicOff className="w-3 h-3" /> : <Mic className="w-3 h-3" />}
-                </button>
-              </div>
-              {voice.listening && (
-                <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-[hsl(0_70%_55%_/_0.08)] border border-[hsl(0_70%_55%_/_0.3)]">
-                  <div className="flex gap-0.5">
-                    {[0,1,2].map(i => (
-                      <div key={i} className="w-1 bg-[hsl(0_70%_55%)] rounded-full animate-bounce"
-                        style={{ height: `${8 + i * 4}px`, animationDelay: `${i * 0.1}s` }} />
-                    ))}
-                  </div>
-                  <span className="text-[10px] text-[hsl(0_70%_55%)] font-medium">Listening… speak your prompt</span>
+            <div className="space-y-3">
+              {/* Prompt */}
+              <div className="space-y-2">
+                <label className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest">Describe your image</label>
+                <div className="relative">
+                  <textarea
+                    value={prompt}
+                    onChange={e => setPrompt(e.target.value)}
+                    placeholder="A majestic wolf howling at the moon over snow-capped peaks…"
+                    rows={4}
+                    className="w-full bg-[hsl(224_15%_9%)] border border-border rounded-xl px-3.5 py-3 pr-10 text-sm text-foreground placeholder:text-muted-foreground/40 outline-none resize-none focus:border-[hsl(265_80%_65%_/_0.5)] transition-all duration-200 leading-relaxed"
+                  />
+                  <button
+                    onClick={voice.listening ? voice.stop : voice.start}
+                    className={cn(
+                      'absolute right-2.5 bottom-2.5 w-7 h-7 rounded-lg flex items-center justify-center transition-all duration-200',
+                      voice.listening
+                        ? 'bg-[hsl(0_70%_55%_/_0.15)] border border-[hsl(0_70%_55%_/_0.5)] text-[hsl(0_70%_55%)] animate-pulse'
+                        : 'bg-[hsl(191_97%_55%_/_0.1)] border border-[hsl(191_97%_55%_/_0.3)] text-[hsl(191_97%_55%)] hover:bg-[hsl(191_97%_55%_/_0.18)]'
+                    )}
+                    title={voice.listening ? 'Stop recording' : 'Voice input'}
+                  >
+                    {voice.listening ? <MicOff className="w-3 h-3" /> : <Mic className="w-3 h-3" />}
+                  </button>
                 </div>
-              )}
+                {voice.listening && (
+                  <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-[hsl(0_70%_55%_/_0.08)] border border-[hsl(0_70%_55%_/_0.3)]">
+                    <div className="flex gap-0.5">
+                      {[0,1,2].map(i => (
+                        <div key={i} className="w-1 bg-[hsl(0_70%_55%)] rounded-full animate-bounce"
+                          style={{ height: `${8 + i * 4}px`, animationDelay: `${i * 0.1}s` }} />
+                      ))}
+                    </div>
+                    <span className="text-[10px] text-[hsl(0_70%_55%)] font-medium">Listening… speak your prompt</span>
+                  </div>
+                )}
+              </div>
+
+              {/* Reference image (optional img2img for generate mode) */}
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <label className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest">Reference Image <span className="normal-case text-muted-foreground/50">(optional)</span></label>
+                  {refImage && (
+                    <button onClick={clearRef} className="text-[10px] text-muted-foreground hover:text-destructive transition-colors">
+                      Remove
+                    </button>
+                  )}
+                </div>
+                {!refImage ? (
+                  <button
+                    onClick={() => refFileInputRef.current?.click()}
+                    className="w-full flex items-center gap-2 py-2.5 px-3 rounded-xl border border-dashed border-border hover:border-[hsl(191_97%_55%_/_0.4)] hover:bg-[hsl(191_97%_55%_/_0.04)] transition-all text-left group"
+                  >
+                    <Upload className="w-3.5 h-3.5 text-muted-foreground group-hover:text-[hsl(191_97%_55%)] shrink-0 transition-colors" />
+                    <div>
+                      <p className="text-[11px] font-medium text-muted-foreground group-hover:text-foreground transition-colors">Upload reference photo</p>
+                      <p className="text-[10px] text-muted-foreground/50">AI will use it as style/composition guide · max 20MB</p>
+                    </div>
+                  </button>
+                ) : (
+                  <div className="relative rounded-xl overflow-hidden border border-[hsl(191_97%_55%_/_0.3)]">
+                    <img src={refImage} alt="Reference" className="w-full object-cover max-h-24" />
+                    <div className="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent" />
+                    <div className="absolute bottom-1.5 left-2 right-2 flex items-center gap-1">
+                      <CheckCircle2 className="w-3 h-3 text-[hsl(191_97%_55%)] shrink-0" />
+                      <span className="text-[9px] text-white font-medium truncate">{refFileName}</span>
+                    </div>
+                  </div>
+                )}
+                <input ref={refFileInputRef} type="file" accept="image/png,image/jpeg,image/webp" onChange={handleRefFileChange} className="hidden" />
+              </div>
+
+              {/* Enhancement Presets */}
+              <div className="space-y-2">
+                <label className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest">Style Enhancements</label>
+                <div className="flex flex-wrap gap-1.5">
+                  {ENHANCEMENT_PRESETS.map(preset => {
+                    const isActive = activePresets.has(preset.id);
+                    return (
+                      <div key={preset.id} className="relative group/preset">
+                        <button
+                          onClick={() => togglePreset(preset)}
+                          className={cn(
+                            'flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-medium border transition-all duration-200 active:scale-95 select-none',
+                            isActive
+                              ? 'text-white shadow-sm'
+                              : 'border-border text-muted-foreground hover:text-foreground hover:border-[hsl(224_15%_22%)]'
+                          )}
+                          style={isActive
+                            ? { background: preset.color, borderColor: preset.color, boxShadow: `0 0 10px ${preset.color.replace(')', ' / 0.4)')}` }
+                            : { background: 'hsl(224 15% 9%)' }
+                          }
+                        >
+                          {preset.label}
+                        </button>
+                        {/* Tooltip */}
+                        <div className="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-2 z-50 opacity-0 group-hover/preset:opacity-100 transition-opacity duration-150">
+                          <div
+                            className="w-44 px-2.5 py-2 rounded-lg text-[10px] leading-relaxed text-white shadow-xl"
+                            style={{ background: 'hsl(224 20% 10%)', border: `1px solid ${preset.color.replace(')', ' / 0.4)')}`, boxShadow: `0 4px 16px hsl(0 0% 0% / 0.5), 0 0 8px ${preset.color.replace(')', ' / 0.2)')}` }}
+                          >
+                            {preset.tooltip}
+                          </div>
+                          {/* Arrow */}
+                          <div
+                            className="absolute top-full left-1/2 -translate-x-1/2 w-0 h-0"
+                            style={{ borderLeft: '5px solid transparent', borderRight: '5px solid transparent', borderTop: `5px solid ${preset.color.replace(')', ' / 0.4)')}` }}
+                          />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+                {activePresets.size > 0 && (
+                  <button
+                    onClick={() => {
+                      // Remove all active preset keywords from prompt
+                      setPrompt(p => {
+                        let result = p;
+                        ENHANCEMENT_PRESETS.forEach(preset => {
+                          if (activePresets.has(preset.id)) {
+                            result = result.replace(new RegExp(',?\\s*' + preset.keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'), '');
+                          }
+                        });
+                        return result.replace(/^,\s*/, '').trim();
+                      });
+                      setActivePresets(new Set());
+                    }}
+                    className="text-[10px] text-muted-foreground/60 hover:text-muted-foreground transition-colors underline-offset-2 hover:underline"
+                  >
+                    Clear all enhancements
+                  </button>
+                )}
+              </div>
+
               <div className="flex flex-col gap-1.5">
+                <label className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest">Quick Ideas</label>
                 {GENERATE_PROMPTS.map(idea => (
                   <button key={idea} onClick={() => setPrompt(idea)}
                     className="text-[10px] px-2.5 py-1.5 rounded-lg border border-border text-muted-foreground hover:text-foreground hover:border-[hsl(265_80%_65%_/_0.35)] hover:bg-[hsl(265_80%_65%_/_0.04)] transition-all text-left leading-relaxed">
@@ -613,13 +690,11 @@ export default function ImageGeneratorPanel({ initialMode = 'generate' }: ImageG
             </div>
           )}
 
-          {/* EDIT / PHOTO MODE */}
-          {referenceMode && (
+          {/* EDIT MODE */}
+          {panelMode === 'edit' && (
             <>
               <div className="space-y-2">
-                <label className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest">
-                  {panelMode === 'photo' ? 'Photo Source' : 'Reference Image'}
-                </label>
+                <label className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest">Source Image (Image-to-Image)</label>
                 {!sourceImage ? (
                   <button onClick={() => fileInputRef.current?.click()}
                     className={cn(
@@ -632,10 +707,8 @@ export default function ImageGeneratorPanel({ initialMode = 'generate' }: ImageG
                       <Upload className="w-4 h-4 text-[hsl(265_80%_65%_/_0.6)]" />
                     </div>
                     <div>
-                      <p className="text-xs font-medium text-muted-foreground group-hover:text-foreground transition-colors">
-                        {panelMode === 'photo' ? 'Click or drag a photo' : 'Click or drag & drop image'}
-                      </p>
-                      <p className="text-[10px] text-muted-foreground/50 mt-0.5">PNG, JPG, WebP · Max 8MB</p>
+                      <p className="text-xs font-medium text-muted-foreground group-hover:text-foreground transition-colors">Click or drag &amp; drop image</p>
+                      <p className="text-[10px] text-muted-foreground/50 mt-0.5">PNG, JPG, WebP · Max 20MB</p>
                     </div>
                   </button>
                 ) : (
@@ -658,14 +731,10 @@ export default function ImageGeneratorPanel({ initialMode = 'generate' }: ImageG
                   onChange={handleFileChange} className="hidden" />
               </div>
               <div className="space-y-2">
-                <label className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest">
-                  {panelMode === 'photo' ? 'Photo Direction' : 'Creative Direction'}
-                </label>
+                <label className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest">Transform Direction</label>
                 <div className="relative">
                   <textarea value={editPrompt} onChange={e => setEditPrompt(e.target.value)}
-                    placeholder={panelMode === 'photo'
-                      ? 'Enhance this photo with natural detail, clean lighting, and premium polish…'
-                      : 'Transform this into a cyberpunk scene with neon lighting…'}
+                    placeholder="Transform this into a cyberpunk scene with neon lighting…"
                     rows={3}
                     className="w-full bg-[hsl(224_15%_9%)] border border-border rounded-xl px-3.5 py-3 pr-10 text-sm text-foreground placeholder:text-muted-foreground/40 outline-none resize-none focus:border-[hsl(265_80%_65%_/_0.5)] transition-all duration-200 leading-relaxed"
                   />
@@ -681,7 +750,7 @@ export default function ImageGeneratorPanel({ initialMode = 'generate' }: ImageG
                   </button>
                 </div>
                 <div className="flex flex-col gap-1.5">
-                  {(panelMode === 'photo' ? PHOTO_PROMPTS : EDIT_PROMPTS).map(idea => (
+                  {EDIT_PROMPTS.map(idea => (
                     <button key={idea} onClick={() => setEditPrompt(idea)}
                       className="text-[10px] px-2.5 py-1.5 rounded-lg border border-border text-muted-foreground hover:text-foreground hover:border-[hsl(265_80%_65%_/_0.35)] hover:bg-[hsl(265_80%_65%_/_0.04)] transition-all text-left">
                       {idea}
@@ -690,6 +759,23 @@ export default function ImageGeneratorPanel({ initialMode = 'generate' }: ImageG
                 </div>
               </div>
             </>
+          )}
+
+          {/* RECREATOR INFO */}
+          {panelMode === 'recreator' && (
+            <div className="p-4 rounded-xl border border-[hsl(4_90%_58%_/_0.2)] bg-[hsl(4_90%_58%_/_0.05)] space-y-2">
+              <div className="flex items-center gap-2">
+                <Camera className="w-4 h-4 text-[hsl(4_90%_58%)]" />
+                <p className="text-xs font-semibold text-foreground">MockJ Photo Recreator</p>
+              </div>
+              <p className="text-[11px] text-muted-foreground leading-relaxed">
+                Upload a photo and transform it — realistic recreations, outfits, headshots, cinematic portraits &amp; more.
+              </p>
+              <div className="flex items-center gap-1.5 pt-1">
+                <span className="w-2 h-2 rounded-full bg-[hsl(4_90%_58%)]" />
+                <span className="text-[10px] text-muted-foreground">Identity preserved · No exploitative content</span>
+              </div>
+            </div>
           )}
 
           {/* HISTORY INFO */}
@@ -713,8 +799,64 @@ export default function ImageGeneratorPanel({ initialMode = 'generate' }: ImageG
             </div>
           )}
 
+          {/* ── AI Model Selector ─────────────────────────────────────────── */}
+          {panelMode !== 'history' && panelMode !== 'recreator' && (
+            <div className="space-y-2">
+              <label className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest">AI Model</label>
+              <button
+                onClick={() => setShowModelPicker(v => !v)}
+                className="w-full flex items-center justify-between px-3 py-2.5 rounded-xl border transition-all duration-200"
+                style={{
+                  background: 'hsl(224 15% 9%)',
+                  borderColor: showModelPicker ? AI_IMAGE_MODELS.find(m => m.id === selectedModelId)?.color + '66' : 'hsl(224 15% 18%)',
+                }}
+              >
+                <div className="flex items-center gap-2">
+                  <div className="w-2 h-2 rounded-full shrink-0 animate-pulse"
+                    style={{ background: AI_IMAGE_MODELS.find(m => m.id === selectedModelId)?.color }} />
+                  <div>
+                    <p className="text-xs font-bold text-foreground">{AI_IMAGE_MODELS.find(m => m.id === selectedModelId)?.label}</p>
+                    <p className="text-[9px] text-muted-foreground">{AI_IMAGE_MODELS.find(m => m.id === selectedModelId)?.badge}</p>
+                  </div>
+                </div>
+                <ChevronDown className="w-3.5 h-3.5 text-muted-foreground transition-transform"
+                  style={{ transform: showModelPicker ? 'rotate(180deg)' : 'none' }} />
+              </button>
+              {showModelPicker && (
+                <div className="rounded-xl border border-border overflow-hidden divide-y divide-border">
+                  {AI_IMAGE_MODELS.map(m => (
+                    <button
+                      key={m.id}
+                      onClick={() => { setSelectedModelId(m.id); setShowModelPicker(false); }}
+                      className="w-full flex items-start gap-3 px-3 py-3 text-left transition-all duration-150"
+                      style={{
+                        background: selectedModelId === m.id ? m.color + '12' : 'hsl(224 15% 9%)',
+                      }}
+                      onMouseEnter={e => { if (selectedModelId !== m.id) (e.currentTarget as HTMLButtonElement).style.background = 'hsl(224 15% 12%)'; }}
+                      onMouseLeave={e => { if (selectedModelId !== m.id) (e.currentTarget as HTMLButtonElement).style.background = 'hsl(224 15% 9%)'; }}
+                    >
+                      <div className="w-2 h-2 rounded-full shrink-0 mt-1.5" style={{ background: m.color }} />
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <p className="text-xs font-bold" style={{ color: selectedModelId === m.id ? m.color : undefined }}>{m.label}</p>
+                          <span className="text-[9px] px-1.5 py-0.5 rounded-full font-bold"
+                            style={{ background: m.color + '18', color: m.color, border: `1px solid ${m.color}44` }}>
+                            {m.badge}
+                          </span>
+                        </div>
+                        <p className="text-[10px] text-muted-foreground mt-0.5 leading-relaxed">{m.desc}</p>
+                      </div>
+                      {selectedModelId === m.id && <CheckCircle2 className="w-4 h-4 shrink-0" style={{ color: m.color }} />}
+                    </button>
+                  ))}
+                </div>
+              )}
+              <p className="text-[9px] text-muted-foreground/50 text-center">All models auto-fallback on quota limits</p>
+            </div>
+          )}
+
           {/* Style */}
-          {panelMode !== 'history' && (
+          {panelMode !== 'history' && panelMode !== 'recreator' && (
             <div className="space-y-2">
               <label className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest">Style</label>
               <div className="grid grid-cols-3 md:grid-cols-2 gap-1.5">
@@ -737,37 +879,7 @@ export default function ImageGeneratorPanel({ initialMode = 'generate' }: ImageG
             </div>
           )}
 
-          {/* Model Version */}
-          {panelMode !== 'history' && (
-            <div className="space-y-2">
-              <div className="flex items-center justify-between gap-2">
-                <label className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest">Image Model / Version</label>
-                <span className="text-[9px] px-1.5 py-0.5 rounded-full border border-[hsl(191_97%_55%_/_0.3)] text-[hsl(191_97%_55%)] bg-[hsl(191_97%_55%_/_0.08)]">HF Pack</span>
-              </div>
-              <div className="grid grid-cols-1 gap-1.5 max-h-56 overflow-y-auto pr-1">
-                {IMAGE_MODEL_VERSIONS.map(model => (
-                  <button
-                    key={model.value}
-                    onClick={() => setModelVersion(model.value)}
-                    className={cn(
-                      'w-full text-left px-3 py-2 rounded-lg border transition-all duration-200',
-                      modelVersion === model.value
-                        ? 'bg-[hsl(191_97%_55%_/_0.1)] border-[hsl(191_97%_55%_/_0.45)] text-[hsl(191_97%_55%)]'
-                        : 'border-border text-muted-foreground hover:border-[hsl(224_15%_22%)] hover:text-foreground'
-                    )}
-                  >
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-[11px] font-bold truncate">{model.label}</span>
-                      <span className="text-[9px] text-muted-foreground/70 shrink-0">{model.source}</span>
-                    </div>
-                    <p className="text-[9px] opacity-70 mt-0.5 truncate">{model.desc}</p>
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Aspect Ratio */}
+          {/* Aspect Ratio — only for generate */}
           {panelMode === 'generate' && (
             <div className="space-y-2">
               <label className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest">Aspect Ratio</label>
@@ -793,41 +905,82 @@ export default function ImageGeneratorPanel({ initialMode = 'generate' }: ImageG
           )}
 
           {/* Quality */}
-          {panelMode !== 'history' && (
+          {panelMode !== 'history' && panelMode !== 'recreator' && (
             <div className="space-y-2">
               <label className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest">Quality</label>
               <div className="grid grid-cols-3 gap-1.5">
                 {QUALITY_OPTIONS.map(q => {
                   const Icon = q.icon;
+                  const locked = q.pro && !isSubscribed;
                   return (
-                    <button key={q.value} onClick={() => {
-                      if (q.pro && !subscription.subscribed) {
-                        toast.error('Ultra 4K image output is included with Pro.');
-                        setShowPricing(true);
-                        return;
-                      }
-                      setQuality(q.value);
-                    }}
+                    <button
+                      key={q.value}
+                      onClick={() => {
+                        if (locked) { setShowQualityUpgrade(true); return; }
+                        setQuality(q.value);
+                        setShowQualityUpgrade(false);
+                      }}
                       className={cn(
-                        'flex flex-col items-start gap-0.5 px-2.5 py-2.5 rounded-xl border transition-all duration-200',
-                        quality === q.value
+                        'flex flex-col items-start gap-0.5 px-2.5 py-2.5 rounded-xl border transition-all duration-200 relative overflow-hidden',
+                        quality === q.value && !locked
                           ? 'bg-[hsl(265_80%_65%_/_0.1)] border-[hsl(265_80%_65%_/_0.45)] text-[hsl(265_80%_65%)]'
+                          : locked
+                          ? 'border-[hsl(265_80%_65%_/_0.2)] text-muted-foreground/50 bg-[hsl(265_80%_65%_/_0.03)] cursor-pointer'
                           : 'border-border text-muted-foreground hover:border-[hsl(224_15%_22%)] hover:text-foreground'
                       )}>
+                      {locked && (
+                        <Lock className="w-2 h-2 absolute top-1.5 right-1.5 text-[hsl(265_80%_65%_/_0.5)]" />
+                      )}
                       <div className="flex items-center gap-1">
                         <Icon className="w-3 h-3" />
                         <span className="text-[10px] font-bold">{q.label}</span>
                       </div>
-                      <span className="text-[9px] opacity-60">{q.desc}</span>
+                      <span className="text-[9px] opacity-60">{locked ? 'Pro only' : q.desc}</span>
                     </button>
                   );
                 })}
               </div>
+              {/* Inline upgrade banner when locked quality selected */}
+              {showQualityUpgrade && !isSubscribed && (
+                <div
+                  className="flex items-start gap-2.5 px-3 py-3 rounded-xl border relative"
+                  style={{ background: 'hsl(265 80% 65% / 0.06)', borderColor: 'hsl(265 80% 65% / 0.35)' }}
+                >
+                  <div className="w-6 h-6 rounded-lg bg-[hsl(265_80%_65%_/_0.12)] border border-[hsl(265_80%_65%_/_0.4)] flex items-center justify-center shrink-0 mt-0.5">
+                    <Crown className="w-3 h-3 text-[hsl(265_80%_65%)]" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-[11px] font-bold text-foreground">Pro Quality Locked</p>
+                    <p className="text-[10px] text-muted-foreground mt-0.5 leading-relaxed">HD and Ultra quality require an active MockJ subscription. Free users get Standard (1K).</p>
+                    <div className="flex gap-2 mt-2">
+                      <a
+                        href="/tokens?tab=shop"
+                        className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[10px] font-black transition-all active:scale-95"
+                        style={{ background: 'linear-gradient(135deg, hsl(265 80% 65%), hsl(191 97% 55%))', color: '#fff' }}
+                      >
+                        <Crown className="w-2.5 h-2.5" /> Upgrade Now
+                      </a>
+                      <button
+                        onClick={() => { setShowQualityUpgrade(false); setQuality('1K'); }}
+                        className="px-2.5 py-1.5 rounded-lg text-[10px] font-semibold text-muted-foreground border border-border hover:text-foreground transition-all"
+                      >
+                        Use Standard
+                      </button>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => setShowQualityUpgrade(false)}
+                    className="w-5 h-5 rounded-full flex items-center justify-center text-muted-foreground hover:text-foreground shrink-0"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                </div>
+              )}
             </div>
           )}
 
           {/* Advanced Creator Options */}
-          {panelMode !== 'history' && (
+          {panelMode !== 'history' && panelMode !== 'recreator' && (
             <div className="rounded-xl border border-border overflow-hidden">
               <button
                 onClick={() => setShowAdvanced(v => !v)}
@@ -878,31 +1031,92 @@ export default function ImageGeneratorPanel({ initialMode = 'generate' }: ImageG
         </div>
 
         {/* Generate button */}
-        {panelMode !== 'history' && (
-          <div className="sticky bottom-0 mt-auto p-4 border-t border-border bg-[hsl(224_20%_5%)] z-10">
+        {panelMode !== 'history' && panelMode !== 'recreator' && (
+          <div className="sticky bottom-0 mt-auto p-4 border-t border-border bg-[hsl(224_20%_5%)] z-10 space-y-2" style={{ paddingBottom: 'max(1rem, env(safe-area-inset-bottom, 0px))' }}>
+            {/* Free daily image counter badge — hidden for Pro */}
+            {!isSubscribed && todayImageCount !== null && (
+              <div className={cn(
+                'flex items-center justify-between px-3 py-2 rounded-xl border transition-all duration-200',
+                todayImageCount >= FREE_DAILY_IMAGES
+                  ? 'border-[hsl(4_90%_58%_/_0.45)] bg-[hsl(4_90%_58%_/_0.08)]'
+                  : 'border-[hsl(142_70%_55%_/_0.25)] bg-[hsl(142_70%_55%_/_0.05)]'
+              )}>
+                <div className="flex items-center gap-1.5">
+                  <Image className={cn('w-3.5 h-3.5 shrink-0', todayImageCount >= FREE_DAILY_IMAGES ? 'text-[hsl(4_90%_58%)]' : 'text-[hsl(142_70%_55%)]')} />
+                  <span className="text-[11px] text-muted-foreground">
+                    <span className={cn('font-black', todayImageCount >= FREE_DAILY_IMAGES ? 'text-[hsl(4_90%_58%)]' : 'text-[hsl(142_70%_55%)]')}>
+                      {Math.min(todayImageCount, FREE_DAILY_IMAGES)}/{FREE_DAILY_IMAGES}
+                    </span>
+                    {' '}free today
+                  </span>
+                </div>
+                {todayImageCount >= FREE_DAILY_IMAGES ? (
+                  <a href="/tokens" className="text-[10px] font-bold text-[hsl(4_90%_58%)] hover:underline transition-colors">
+                    Go Unlimited →
+                  </a>
+                ) : (
+                  <span className="text-[10px] text-muted-foreground/60">
+                    {FREE_DAILY_IMAGES - todayImageCount} left
+                  </span>
+                )}
+              </div>
+            )}
+
+            {/* Token cost indicator — hidden for subscribers */}
+            {!isSubscribed && (
+              <div className={cn(
+                'flex items-center justify-between px-3 py-2 rounded-xl border transition-all duration-200',
+                hasSufficientBalance
+                  ? 'border-[hsl(38_95%_60%_/_0.25)] bg-[hsl(38_95%_60%_/_0.05)]'
+                  : 'border-[hsl(4_90%_58%_/_0.4)] bg-[hsl(4_90%_58%_/_0.06)]'
+              )}>
+                <div className="flex items-center gap-1.5">
+                  <Coins className={cn('w-3.5 h-3.5 shrink-0', hasSufficientBalance ? 'text-[hsl(38_95%_60%)]' : 'text-[hsl(4_90%_58%)]')} />
+                  <span className="text-[11px] text-muted-foreground">
+                    Cost:{' '}
+                    <span className={cn('font-black', hasSufficientBalance ? 'text-[hsl(38_95%_60%)]' : 'text-[hsl(4_90%_58%)]')}>
+                      {tokenCost} tokens
+                    </span>
+                  </span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  {!hasSufficientBalance && <AlertTriangle className="w-3 h-3 text-[hsl(4_90%_58%)]" />}
+                  <span className={cn('text-[11px] font-semibold', hasSufficientBalance ? 'text-muted-foreground' : 'text-[hsl(4_90%_58%)]')}>
+                    {wallet.loading ? '...' : wallet.balance.toLocaleString()} bal
+                  </span>
+                </div>
+              </div>
+            )}
+
             <button
               onClick={() => handleGenerate()}
               disabled={!canSubmit}
               className={cn(
                 'w-full flex items-center justify-center gap-2 py-3 rounded-xl font-semibold text-sm transition-all duration-200 active:scale-[0.97]',
-                canSubmit
+                canSubmit && hasSufficientBalance
                   ? 'text-white hover:opacity-90 shadow-[0_0_20px_hsl(4_90%_58%_/_0.3)]'
+                  : canSubmit && !hasSufficientBalance
+                  ? 'text-white ring-2 ring-[hsl(4_90%_58%_/_0.6)] ring-offset-1 ring-offset-[hsl(224_20%_5%)]'
                   : 'bg-[hsl(224_15%_12%)] text-muted-foreground cursor-not-allowed'
               )}
               style={canSubmit ? { background: 'linear-gradient(135deg, hsl(4 90% 58%), hsl(265 80% 65%))' } : undefined}
             >
               {loading
-                ? <><RefreshCw className="w-4 h-4 animate-spin" /> {referenceMode ? 'Transforming…' : 'Creating…'}</>
+                ? <><RefreshCw className="w-4 h-4 animate-spin" /> {panelMode === 'edit' ? 'Transforming...' : 'Creating...'}</>
                 : panelMode === 'edit'
                 ? <><Wand2 className="w-4 h-4" /> Transform Image</>
-                : panelMode === 'photo'
-                ? <><Image className="w-4 h-4" /> Enhance Photo</>
                 : <><Sparkles className="w-4 h-4" /> Generate Image</>
               }
             </button>
-            {referenceMode && !sourceImage && (
-              <p className="text-[10px] text-muted-foreground/50 text-center mt-2">
-                Upload or drag a {panelMode === 'photo' ? 'photo' : 'reference image'} to enable
+
+            {panelMode === 'edit' && !sourceImage && (
+              <p className="text-[10px] text-muted-foreground/50 text-center">Upload or drag a reference image to enable</p>
+            )}
+            {!hasSufficientBalance && !wallet.loading && (
+              <p className="text-[10px] text-[hsl(4_90%_58%)] text-center font-semibold">
+                Need {tokenCost - wallet.balance} more tokens
+                {' — '}
+                <a href="/tokens" className="underline hover:text-[hsl(4_90%_70%)] transition-colors">Top up</a>
               </p>
             )}
           </div>
@@ -911,6 +1125,13 @@ export default function ImageGeneratorPanel({ initialMode = 'generate' }: ImageG
 
       {/* ── Right Panel ─────────────────────────────────────────────────────────── */}
       <div className="flex-1 flex flex-col bg-[hsl(224_20%_6%)] overflow-hidden relative min-h-[320px] md:min-h-0">
+
+        {/* PHOTO RECREATOR VIEW */}
+        {panelMode === 'recreator' && (
+          <div className="flex-1 flex flex-col overflow-hidden bg-[hsl(224_20%_6%)] min-h-[360px] md:min-h-0">
+            <PhotoRecreator onClose={() => setPanelMode('generate')} isInline />
+          </div>
+        )}
 
         {/* HISTORY VIEW */}
         {panelMode === 'history' && (
@@ -984,7 +1205,7 @@ export default function ImageGeneratorPanel({ initialMode = 'generate' }: ImageG
             {dragging && (
               <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-[hsl(265_80%_65%_/_0.12)] border-2 border-dashed border-[hsl(265_80%_65%)] rounded-2xl m-4 pointer-events-none">
                 <Upload className="w-10 h-10 text-[hsl(265_80%_65%)] mb-3" />
-                <p className="text-sm font-bold text-[hsl(265_80%_65%)]">Drop image to use as a reference</p>
+                <p className="text-sm font-bold text-[hsl(265_80%_65%)]">Drop image to edit</p>
               </div>
             )}
 
@@ -994,7 +1215,7 @@ export default function ImageGeneratorPanel({ initialMode = 'generate' }: ImageG
                 <div className="mb-6">
                   <div className="w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-4"
                     style={{ background: 'hsl(4 90% 58% / 0.1)', border: '1px solid hsl(4 90% 58% / 0.3)', boxShadow: '0 0 30px hsl(4 90% 58% / 0.15)' }}>
-                    {referenceMode
+                    {panelMode === 'edit'
                       ? <Wand2 className="w-7 h-7" style={{ color: 'hsl(4 90% 58%)' }} />
                       : <Image className="w-7 h-7" style={{ color: 'hsl(4 90% 58%)' }} />}
                   </div>
@@ -1002,28 +1223,17 @@ export default function ImageGeneratorPanel({ initialMode = 'generate' }: ImageG
                     MOCKJ <span style={{ color: 'hsl(4 90% 58%)', textShadow: '0 0 20px hsl(4 90% 58% / 0.5)' }}>AI STUDIO</span>
                   </h3>
                   <p className="text-xs font-bold uppercase tracking-widest mb-3" style={{ color: 'hsl(265 80% 65%)' }}>
-                    {panelMode === 'photo'
-                      ? 'Enhance. Restore. Polish.'
-                      : panelMode === 'edit'
-                      ? 'Transform. Reimagine. Create.'
-                      : 'Generate. Edit. Control.'}
+                    {panelMode === 'edit' ? 'Transform. Reimagine. Create.' : 'Generate. Edit. Control.'}
                   </p>
                   <p className="text-sm text-muted-foreground leading-relaxed mb-5">
-                    {panelMode === 'photo'
-                      ? 'Upload a photo, choose enhancement direction, and run MockJ photo polish with creator controls.'
-                      : panelMode === 'edit'
+                    {panelMode === 'edit'
                       ? 'Upload any image as a reference — transform it with voice commands, style transfer, and advanced creator tools.'
                       : 'Describe your vision with text or voice. Choose style, ratio, and quality — MockJ AI brings it to life.'}
                   </p>
                 </div>
                 <div className="grid grid-cols-2 gap-2 mb-6">
                   {CREATOR_FEATURES.map(f => (
-                    <button
-                      key={f.label}
-                      type="button"
-                      onClick={() => handleFeatureClick(f.label)}
-                      className="flex items-center gap-2.5 px-3 py-2.5 rounded-xl border border-border bg-[hsl(224_15%_8%)] hover:border-[hsl(265_80%_65%_/_0.3)] transition-all text-left focus:outline-none focus:ring-2 focus:ring-[hsl(265_80%_65%_/_0.35)]"
-                    >
+                    <div key={f.label} className="flex items-center gap-2.5 px-3 py-2.5 rounded-xl border border-border bg-[hsl(224_15%_8%)] hover:border-[hsl(265_80%_65%_/_0.3)] transition-all">
                       <div className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0"
                         style={{
                           backgroundColor: f.color.replace(')', ' / 0.12)').replace('hsl(', 'hsl('),
@@ -1035,7 +1245,7 @@ export default function ImageGeneratorPanel({ initialMode = 'generate' }: ImageG
                         <p className="text-[11px] font-semibold text-foreground truncate">{f.label}</p>
                         <p className="text-[10px] text-muted-foreground truncate">{f.desc}</p>
                       </div>
-                    </button>
+                    </div>
                   ))}
                 </div>
                 {panelMode === 'generate' && aspectVisual && (
@@ -1058,7 +1268,9 @@ export default function ImageGeneratorPanel({ initialMode = 'generate' }: ImageG
                   <div className="flex items-center justify-center gap-2">
                     {[0,1,2].map(i => <div key={i} className="w-2 h-2 rounded-full bg-[hsl(265_80%_65%)] animate-bounce" style={{ animationDelay: `${i * 150}ms` }} />)}
                   </div>
-                  <p className="text-sm text-muted-foreground transition-all duration-500">{msgs[loadingMsgIdx]}</p>
+                  <p className="text-sm text-muted-foreground transition-all duration-500">
+                    {isRetrying ? 'Retrying with a different model…' : msgs[loadingMsgIdx]}
+                  </p>
                   {(charConsistency || facePreservation || privateMode) && (
                     <div className="flex items-center justify-center gap-3 text-[10px] text-muted-foreground/60">
                       {charConsistency && <span className="flex items-center gap-1"><User className="w-3 h-3" /> Character lock active</span>}
@@ -1073,7 +1285,7 @@ export default function ImageGeneratorPanel({ initialMode = 'generate' }: ImageG
             {/* Result */}
             {result && !loading && (
               <div className="w-full max-w-lg animate-message-in space-y-4">
-                {referenceMode && sourceImage ? (
+                {panelMode === 'edit' && sourceImage ? (
                   <div className="grid grid-cols-2 gap-3">
                     <div className="space-y-1.5">
                       <p className="text-[10px] text-muted-foreground font-semibold uppercase tracking-widest text-center">Original</p>
@@ -1110,7 +1322,7 @@ export default function ImageGeneratorPanel({ initialMode = 'generate' }: ImageG
                     <p className="text-xs text-muted-foreground truncate">"{resultPrompt}"</p>
                     <div className="flex items-center gap-2 mt-0.5 flex-wrap">
                       <p className="text-[10px] text-muted-foreground/50">
-                        {selectedModel.label} · {STYLES.find(s => s.value === style)?.label} · {panelMode === 'generate' ? ratio : panelMode === 'photo' ? 'Photo Enhance' : 'Reference Edit'} · {QUALITY_OPTIONS.find(q => q.value === quality)?.label}
+                        {STYLES.find(s => s.value === style)?.label} · {panelMode === 'generate' ? ratio : 'Reference Edit'} · {QUALITY_OPTIONS.find(q => q.value === quality)?.label}
                       </p>
                       {privateMode && <span className="flex items-center gap-1 text-[10px] text-[hsl(200_80%_60%)]"><Lock className="w-2.5 h-2.5" />Private</span>}
                       <span className="flex items-center gap-1 text-[10px] text-[hsl(38_95%_60%)]"><Award className="w-2.5 h-2.5" />Commercial</span>
@@ -1301,7 +1513,6 @@ export default function ImageGeneratorPanel({ initialMode = 'generate' }: ImageG
         )}
       </div>
     )}
-    {showPricing && <PricingModal onClose={() => setShowPricing(false)} />}
     </>
   );
 }

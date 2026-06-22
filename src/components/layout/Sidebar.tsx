@@ -1,16 +1,24 @@
 import { useState, useEffect } from 'react';
-import { Plus, MessageSquare, Trash2, Image, Video, ChevronLeft, ChevronRight, Sparkles, BookOpen, Download, Smile, Crown, LogIn, LogOut, User, Brain, Volume2, VolumeX, Settings, X, Coins, Wand2 } from 'lucide-react';
-import { getAutoSpeak, toggleAutoSpeak } from '@/hooks/useAutoSpeak';
+import { MessageSquare, Trash2, Image, Video, LogIn, LogOut, User, Brain, Settings, X, Coins, FolderOpen, Code2 } from 'lucide-react';
+import { useTokenWallet } from '@/hooks/useTokenWallet';
+import { getAutoSpeak } from '@/hooks/useAutoSpeak';
+import { getTTSVolume } from '@/hooks/useTTS';
 import ProjectBrain from '@/components/features/ProjectBrain';
+import WalletPanel from '@/components/features/WalletPanel';
+import MemoryPanel from '@/components/features/MemoryPanel';
 import { Conversation, ChatMode } from '@/types/chat';
-import { cn } from '@/lib/utils';
-import logoImg from '@/assets/mockj-logo.png';
 import { toast } from 'sonner';
 import { PERSONALITY_PRESETS, PersonalityPreset } from '@/components/features/PersonalityPicker';
 import { useAuth } from '@/contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
 
+// ── MLTX Green palette ────────────────────────────────────────────────────────
+const GREEN  = 'hsl(142 70% 55%)';
+const GREEN2 = 'hsl(142 70% 40%)';
+const RED    = 'hsl(4 90% 58%)';
+
 interface SidebarProps {
+  onOpenWallet?: () => void;
   conversations: Conversation[];
   activeId: string | null;
   activeConversation: Conversation | null;
@@ -20,442 +28,292 @@ interface SidebarProps {
   onOpenLibrary: () => void;
   onOpenPersonality: () => void;
   onOpenPricing: () => void;
-  onOpenSkillCreator: () => void;
   currentPersonality: PersonalityPreset;
   onMobileClose?: () => void;
+  activeTab?: string;
+  onTabChange?: (tab: string) => void;
 }
 
-function exportConversation(conv: Conversation) {
-  const lines: string[] = [];
-  lines.push(`# ${conv.title}`);
-  lines.push(`*Exported from MockJ · ${new Date().toLocaleString()}*`);
-  lines.push(`*Mode: ${conv.mode} · Messages: ${conv.messages.length}*`);
-  lines.push('');
-  lines.push('---');
-  lines.push('');
-  for (const msg of conv.messages) {
-    const time = msg.timestamp
-      ? new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-      : '';
-    const role = msg.role === 'user' ? '**You**' : '**MockJ**';
-    const timeLabel = time ? ` *(${time})*` : '';
-    lines.push(`### ${role}${timeLabel}`);
-    lines.push('');
-    if (msg.type === 'image' && msg.mediaUrl) {
-      lines.push(`![Generated Image](${msg.mediaUrl})`);
-      if (msg.mediaPrompt) lines.push(`*Prompt: ${msg.mediaPrompt}*`);
-    } else if (msg.type === 'video') {
-      lines.push(`🎬 *Video generated*`);
-      if (msg.mediaPrompt) lines.push(`*Prompt: ${msg.mediaPrompt}*`);
-      if (msg.mediaUrl) lines.push(`[Watch Video](${msg.mediaUrl})`);
-    } else {
-      lines.push(msg.content);
-    }
-    lines.push('');
-    lines.push('---');
-    lines.push('');
-  }
-  lines.push(`*End of conversation · MockJ*`);
-  const blob = new Blob([lines.join('\n')], { type: 'text/markdown;charset=utf-8' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `mockj-${conv.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 40)}-${Date.now()}.md`;
-  a.click();
-  URL.revokeObjectURL(url);
-}
-
-const modeIcon = (mode: ChatMode) => {
-  if (mode === 'image') return <Image className="w-3.5 h-3.5 shrink-0" />;
-  if (mode === 'video') return <Video className="w-3.5 h-3.5 shrink-0" />;
-  return <MessageSquare className="w-3.5 h-3.5 shrink-0" />;
-};
+const NAV_ITEMS = [
+  { id: 'chat',            label: 'Chat',         icon: MessageSquare },
+  { id: 'image-studio',    label: 'Images',       icon: Image },
+  { id: 'video-studio',    label: 'Video Studio', icon: Video },
+  { id: 'ide-builder',     label: 'IDE Builder',  icon: Code2 },
+  { id: 'universe',        label: 'Projects',     icon: FolderOpen },
+  { id: 'memory',          label: 'Memory',       icon: Brain },
+  { id: 'settings',        label: 'Settings',     icon: Settings },
+];
 
 export default function Sidebar({
   conversations,
   activeId,
-  activeConversation,
   onSelect,
   onNew,
   onDelete,
   onOpenLibrary,
   onOpenPersonality,
   onOpenPricing,
-  onOpenSkillCreator,
+  onOpenWallet,
   currentPersonality,
   onMobileClose,
+  activeTab = 'chat',
+  onTabChange,
 }: SidebarProps) {
-  const [collapsed, setCollapsed] = useState(false);
-  const [hoveredId, setHoveredId] = useState<string | null>(null);
-  const [showBrain, setShowBrain] = useState(false);
-  const [autoSpeak, setAutoSpeak] = useState(() => getAutoSpeak());
-  const { user, subscription, logout } = useAuth();
-  const navigate = useNavigate();
+  const [hoveredId, setHoveredId]       = useState<string | null>(null);
+  const [showBrain, setShowBrain]       = useState(false);
+  const [showWallet, setShowWallet]     = useState(false);
+  const [showMemory, setShowMemory]     = useState(false);
+  const [showConvList, setShowConvList] = useState(false);
+  const [autoSpeak, setAutoSpeakState]  = useState(() => getAutoSpeak());
+  const [ttsVolume, setTtsVolume]       = useState(() => getTTSVolume());
+  const { user, subscription, logout }  = useAuth();
+  const { wallet }                      = useTokenWallet();
+  const navigate                        = useNavigate();
 
-  // Sync auto-speak state when toggled from elsewhere
   useEffect(() => {
-    const handler = (e: Event) => {
-      setAutoSpeak((e as CustomEvent<{ enabled: boolean }>).detail.enabled);
-    };
+    const handler = (e: Event) => setAutoSpeakState((e as CustomEvent<{ enabled: boolean }>).detail.enabled);
     window.addEventListener('mockj:autospeak-change', handler);
     return () => window.removeEventListener('mockj:autospeak-change', handler);
   }, []);
 
-  const handleAutoSpeakToggle = () => {
-    const next = toggleAutoSpeak();
-    setAutoSpeak(next);
-    toast.success(next ? 'Auto-Speak on. Say "Hey MockJ" to talk hands-free.' : 'Auto-Speak off.');
+  useEffect(() => {
+    const handler = (e: Event) => setTtsVolume((e as CustomEvent<{ volume: number }>).detail.volume);
+    window.addEventListener('mockj:tts-volume-change', handler);
+    return () => window.removeEventListener('mockj:tts-volume-change', handler);
+  }, []);
+
+  const handleNavClick = (id: string) => {
+    if (id === 'universe') { navigate('/universe'); return; }
+    if (id === 'memory')   { setShowMemory(true);   return; }
+    if (id === 'settings') { navigate('/account');  return; }
+    onTabChange?.(id);
+    onMobileClose?.();
   };
 
   return (
     <>
       <aside
-        className={cn(
-          'flex flex-col h-full transition-all duration-300 border-r border-border relative',
-          'bg-[hsl(224_20%_5%)]',
-          collapsed ? 'w-14' : 'w-64 md:w-64'
-        )}
-        style={{ width: collapsed ? '3.5rem' : '16rem' }}
+        className="flex flex-col h-full w-52 shrink-0"
+        style={{
+          background: 'hsl(142 18% 4%)',
+          borderRight: `1px solid ${GREEN}20`,
+        }}
       >
-        {/* Logo / Brand */}
-        <div className={cn('flex items-center gap-3 px-4 py-4 border-b border-border', collapsed && 'justify-center px-2')}>
-          <div className="w-8 h-8 rounded-lg overflow-hidden shrink-0 animate-pulse-glow ring-1" style={{ outline: '1px solid hsl(4 90% 58% / 0.4)' }}>
-            <img src={logoImg} alt="MockJ" className="w-full h-full object-cover" />
-          </div>
-          {!collapsed && (
-            <div className="flex-1 flex items-center justify-between">
-              <div>
-                <h1 className="font-bold text-base text-foreground leading-none flex items-baseline gap-1" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>
-                  MockJ AI
-                  <span className="text-xs font-black" style={{ color: 'hsl(4 90% 58%)', textShadow: '0 0 10px hsl(4 90% 58% / 0.6)' }}>4</span>
-                </h1>
-                <p className="text-[10px] mt-0.5 leading-none" style={{ color: 'hsl(4 90% 58%)' }}>MoreiraJ / MLTX · Crew</p>
-              </div>
-              {/* Mobile close button */}
-              {onMobileClose && (
-                <button
-                  onClick={onMobileClose}
-                  className="md:hidden w-7 h-7 flex items-center justify-center rounded-lg border border-border text-muted-foreground hover:text-foreground transition-all"
-                >
-                  <X className="w-3.5 h-3.5" />
-                </button>
-              )}
-            </div>
-          )}
-        </div>
-
-        {/* User Profile Strip */}
-        {!collapsed && (
-          <div className="px-3 pt-3 pb-1">
-            {user ? (
-              <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-[hsl(224_15%_10%)] border border-border">
-                <div className="w-7 h-7 rounded-full overflow-hidden bg-[hsl(4_90%_58%_/_0.15)] border border-[hsl(4_90%_58%_/_0.4)] flex items-center justify-center shrink-0">
-                  {user.avatar
-                    ? <img src={user.avatar} alt={user.username} className="w-full h-full object-cover" />
-                    : <User className="w-3.5 h-3.5 text-[hsl(4_90%_58%)]" />}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-1.5">
-                    <p className="text-xs font-medium text-foreground truncate">{user.username}</p>
-                    {subscription.subscribed && (
-                      <span
-                        className="shrink-0 inline-flex items-center justify-center w-4 h-4 rounded-full"
-                        style={{
-                          background: 'linear-gradient(135deg, hsl(191 97% 55%), hsl(265 80% 65%))',
-                          boxShadow: '0 0 8px hsl(191 97% 55% / 0.7), 0 0 16px hsl(191 97% 55% / 0.4)',
-                          animation: 'pulse 2s ease-in-out infinite',
-                        }}
-                        title="MockJ Pro active"
-                      >
-                        <Crown className="w-2 h-2 text-[hsl(224_20%_6%)]" />
-                      </span>
-                    )}
-                  </div>
-                  {subscription.subscribed ? (
-                    <p className="text-[10px] text-[hsl(191_97%_55%)] flex items-center gap-1">
-                      <span className="w-1.5 h-1.5 rounded-full bg-[hsl(191_97%_55%)] animate-pulse inline-block" />
-                      MockJ {subscription.tier === 'sale' ? 'Intro' : 'Pro'} - Active
-                    </p>
-                  ) : (
-                    <p className="text-[10px] text-muted-foreground">Free plan</p>
-                  )}
-                </div>
-                <button
-                  onClick={async () => { await logout(); toast.success('Signed out'); }}
-                  className="w-6 h-6 flex items-center justify-center rounded-lg text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-all"
-                  title="Sign out"
-                >
-                  <LogOut className="w-3 h-3" />
-                </button>
-              </div>
-            ) : (
-              <button
-                onClick={() => navigate('/auth')}
-                className="w-full flex items-center gap-2 px-3 py-2 rounded-xl border border-dashed border-border text-xs text-muted-foreground hover:text-[hsl(191_97%_55%)] hover:border-[hsl(191_97%_55%_/_0.4)] transition-all duration-200"
-              >
-                <LogIn className="w-3.5 h-3.5" />
-                Sign in / Create account
-              </button>
-            )}
-          </div>
-        )}
-
-        {/* New Chat Button */}
-        <div className={cn('p-3', collapsed && 'px-2')}>
-          <button
-            onClick={() => onNew('chat')}
-            className={cn(
-              'flex items-center gap-2 rounded-lg transition-all duration-200 text-sm font-medium',
-              'bg-[hsl(4_90%_58%)] text-white hover:bg-[hsl(4_90%_65%)]',
-              'active:scale-95',
-              collapsed ? 'w-full justify-center p-2' : 'w-full px-3 py-2'
-            )}
+        {/* ── Logo ─────────────────────────────────────────────────── */}
+        <div className="flex items-center gap-3 px-5 pt-6 pb-5">
+          <div
+            className="w-11 h-11 rounded-xl overflow-hidden shrink-0"
+            style={{
+              boxShadow: `0 0 20px ${GREEN}55, 0 0 40px ${GREEN}18`,
+              border: `1.5px solid ${GREEN}66`,
+            }}
           >
-            <Plus className="w-4 h-4 shrink-0" />
-            {!collapsed && <span>New Chat</span>}
-          </button>
+            <img src="/mockj-icon.png" alt="MockJ" className="w-full h-full object-cover object-top" />
+          </div>
+          <div className="min-w-0">
+            <h1
+              className="font-black text-xl leading-none tracking-wide"
+              style={{
+                fontFamily: 'Space Grotesk, sans-serif',
+                background: `linear-gradient(135deg, ${GREEN}, hsl(142 70% 45%), ${RED})`,
+                WebkitBackgroundClip: 'text',
+                WebkitTextFillColor: 'transparent',
+                backgroundClip: 'text',
+              }}
+            >
+              MockJ
+            </h1>
+            <div className="flex items-center gap-1.5 mt-0.5">
+              <span className="w-1.5 h-1.5 rounded-full animate-pulse" style={{ background: GREEN, boxShadow: `0 0 6px ${GREEN}` }} />
+              <span className="text-[10px] font-semibold" style={{ color: GREEN }}>online</span>
+            </div>
+          </div>
+          {onMobileClose && (
+            <button
+              onClick={onMobileClose}
+              className="md:hidden ml-auto w-7 h-7 flex items-center justify-center rounded-lg"
+              style={{ color: `${GREEN}88` }}
+            >
+              <X className="w-4 h-4" />
+            </button>
+          )}
         </div>
 
-        {/* Quick Create Buttons */}
-        {!collapsed && (
-          <div className="px-3 pb-2 flex gap-2">
-            <button
-              onClick={() => onNew('image')}
-              className="flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-lg text-xs font-medium border border-border text-muted-foreground hover:border-[hsl(265_80%_65%)] hover:text-[hsl(265_80%_65%)] transition-all duration-200"
-            >
-              <Image className="w-3 h-3" /> Image
-            </button>
-            <button
-              onClick={() => onNew('video')}
-              className="flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-lg text-xs font-medium border border-border text-muted-foreground hover:border-[hsl(4_90%_58%)] hover:text-[hsl(4_90%_58%)] transition-all duration-200"
-            >
-              <Video className="w-3 h-3" /> Video
-            </button>
-          </div>
-        )}
+        {/* ── Main Nav ─────────────────────────────────────────────── */}
+        <nav className="flex flex-col px-3 gap-0.5 flex-1 overflow-y-auto">
+          {NAV_ITEMS.map(({ id, label, icon: Icon }) => {
+            const isActive = activeTab === id;
+            return (
+              <button
+                key={id}
+                onClick={() => handleNavClick(id)}
+                className="flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm font-semibold transition-all duration-150 text-left w-full"
+                style={{
+                  background: isActive ? `${GREEN}14` : 'transparent',
+                  color:      isActive ? GREEN      : `${GREEN}66`,
+                  border:     isActive ? `1px solid ${GREEN}44` : '1px solid transparent',
+                  boxShadow:  isActive ? `0 0 14px ${GREEN}1a` : 'none',
+                }}
+                onMouseEnter={e => {
+                  if (!isActive) {
+                    (e.currentTarget as HTMLButtonElement).style.background = `${GREEN}08`;
+                    (e.currentTarget as HTMLButtonElement).style.color = `${GREEN}bb`;
+                  }
+                }}
+                onMouseLeave={e => {
+                  if (!isActive) {
+                    (e.currentTarget as HTMLButtonElement).style.background = 'transparent';
+                    (e.currentTarget as HTMLButtonElement).style.color = `${GREEN}66`;
+                  }
+                }}
+              >
+                <Icon className="w-4 h-4 shrink-0" />
+                {label}
+                {isActive && (
+                  <span className="ml-auto w-1.5 h-1.5 rounded-full" style={{ background: GREEN, boxShadow: `0 0 6px ${GREEN}` }} />
+                )}
+              </button>
+            );
+          })}
 
-        {/* Conversation List */}
-        <div className="flex-1 overflow-y-auto px-2 py-1 space-y-0.5">
-          {!collapsed && conversations.length === 0 && (
-            <div className="text-center py-8">
-              <Sparkles className="w-6 h-6 text-muted-foreground mx-auto mb-2 opacity-40" />
-              <p className="text-xs text-muted-foreground opacity-60">No conversations yet</p>
-            </div>
+          {/* Divider */}
+          <div className="my-2 border-t" style={{ borderColor: `${GREEN}14` }} />
+
+          {/* Conversation list toggle */}
+          {user && conversations.length > 0 && (
+            <button
+              onClick={() => setShowConvList(v => !v)}
+              className="flex items-center gap-3 px-4 py-2.5 rounded-xl text-xs font-semibold w-full transition-all"
+              style={{ color: `${GREEN}55`, background: 'transparent' }}
+              onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = `${GREEN}99`; }}
+              onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = `${GREEN}55`; }}
+            >
+              <MessageSquare className="w-3.5 h-3.5 shrink-0" />
+              Recent Chats
+              <span className="ml-auto text-[10px] font-black" style={{ color: GREEN }}>
+                {conversations.length}
+              </span>
+            </button>
           )}
-          {conversations.map(conv => (
+
+          {showConvList && user && conversations.map(conv => (
             <div
               key={conv.id}
               onMouseEnter={() => setHoveredId(conv.id)}
               onMouseLeave={() => setHoveredId(null)}
-              className={cn(
-                'group flex items-center gap-2 rounded-lg cursor-pointer transition-all duration-150',
-                collapsed ? 'justify-center p-2' : 'px-2 py-2',
-                activeId === conv.id
-                  ? 'bg-[hsl(224_15%_16%)] text-foreground'
-                  : 'text-muted-foreground hover:bg-[hsl(224_15%_12%)] hover:text-foreground'
-              )}
-              onClick={() => onSelect(conv.id)}
+              className="group flex items-center gap-2 px-3 py-2 rounded-xl cursor-pointer transition-all duration-150 ml-2"
+              style={{
+                background: activeId === conv.id ? `${GREEN}10` : 'transparent',
+                border:     activeId === conv.id ? `1px solid ${GREEN}38` : '1px solid transparent',
+                color:      activeId === conv.id ? GREEN : `${GREEN}66`,
+                boxShadow:  activeId === conv.id ? `0 0 10px ${GREEN}10` : 'none',
+              }}
+              onClick={() => { onSelect(conv.id); onMobileClose?.(); }}
             >
-              <span className={cn(activeId === conv.id ? 'text-[hsl(4_90%_58%)]' : 'text-muted-foreground')}>
-                {modeIcon(conv.mode)}
-              </span>
-              {!collapsed && (
-                <>
-                  <span className="flex-1 text-xs truncate">{conv.title}</span>
-                  {hoveredId === conv.id && (
-                    <button
-                      onClick={e => { e.stopPropagation(); onDelete(conv.id); }}
-                      className="shrink-0 opacity-60 hover:opacity-100 hover:text-destructive transition-opacity"
-                    >
-                      <Trash2 className="w-3 h-3" />
-                    </button>
-                  )}
-                </>
+              <span className="text-xs truncate flex-1">{conv.title}</span>
+              {hoveredId === conv.id && (
+                <button
+                  onClick={e => { e.stopPropagation(); onDelete(conv.id); }}
+                  className="opacity-60 hover:opacity-100 transition-opacity"
+                  style={{ color: RED }}
+                >
+                  <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/><path d="M10 11v6M14 11v6"/></svg>
+                </button>
               )}
             </div>
           ))}
-        </div>
 
-        {/* Collapse Toggle */}
-        <button
-          onClick={() => setCollapsed(v => !v)}
-          className="absolute -right-3 top-1/2 -translate-y-1/2 w-6 h-6 rounded-full bg-[hsl(224_15%_14%)] border border-border flex items-center justify-center text-muted-foreground hover:text-foreground hover:border-[hsl(191_97%_55%)] transition-all duration-200 z-10"
-        >
-          {collapsed ? <ChevronRight className="w-3 h-3" /> : <ChevronLeft className="w-3 h-3" />}
-        </button>
-
-        {/* Bottom Actions */}
-        <div className={cn('p-3 border-t border-border space-y-1.5', collapsed && 'px-2')}>
-          {/* Upgrade / Pro Status */}
-          {!subscription.subscribed ? (
+          {!user && (
             <button
-              onClick={onOpenPricing}
-              className={cn(
-                'flex items-center gap-2 rounded-lg transition-all duration-200 text-xs font-medium w-full',
-                'bg-[hsl(4_90%_58%_/_0.1)] border border-[hsl(4_90%_58%_/_0.4)] text-[hsl(4_90%_58%)] hover:bg-[hsl(4_90%_58%_/_0.18)]',
-                collapsed ? 'justify-center p-2' : 'px-3 py-2'
-              )}
+              onClick={() => navigate('/auth')}
+              className="flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold text-left w-full transition-all"
+              style={{ color: `${GREEN}77`, background: 'transparent' }}
+              onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = GREEN; }}
+              onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = `${GREEN}77`; }}
             >
-              <Crown className="w-3.5 h-3.5 shrink-0" />
-              {!collapsed && <span>Upgrade to Pro</span>}
-            </button>
-          ) : (
-            <button
-              onClick={onOpenPricing}
-              className={cn(
-                'flex items-center gap-2 rounded-lg transition-all duration-200 text-xs font-medium w-full',
-                'border border-[hsl(4_90%_58%_/_0.3)] text-[hsl(4_90%_58%)] bg-[hsl(4_90%_58%_/_0.06)] hover:bg-[hsl(4_90%_58%_/_0.12)]',
-                collapsed ? 'justify-center p-2' : 'px-3 py-2'
-              )}
-            >
-              <Crown className="w-3.5 h-3.5 shrink-0" />
-              {!collapsed && <span>MockJ {subscription.tier === 'sale' ? 'Intro' : 'Pro'} ✓</span>}
+              <LogIn className="w-4 h-4 shrink-0" />
+              Sign In
             </button>
           )}
+        </nav>
 
-          {/* Export Chat */}
-          <button
-            onClick={() => {
-              if (!activeConversation || activeConversation.messages.length === 0) {
-                toast.error('No messages to export. Start a conversation first.');
-                return;
-              }
-              exportConversation(activeConversation);
-              toast.success('Chat exported as Markdown!');
-            }}
-            className={cn(
-              'flex items-center gap-2 rounded-lg transition-all duration-200 text-xs font-medium w-full border border-border text-muted-foreground hover:border-[hsl(4_90%_58%_/_0.5)] hover:text-[hsl(4_90%_58%)] hover:bg-[hsl(4_90%_58%_/_0.06)]',
-              collapsed ? 'justify-center p-2' : 'px-3 py-2'
-            )}
-          >
-            <Download className="w-3.5 h-3.5 shrink-0" />
-            {!collapsed && <span>Export Chat</span>}
-          </button>
-
-          {/* Prompt Library */}
-          <button
-            onClick={onOpenLibrary}
-            className={cn(
-              'flex items-center gap-2 rounded-lg transition-all duration-200 text-xs font-medium w-full',
-              'border border-border text-muted-foreground hover:border-[hsl(265_80%_65%_/_0.5)] hover:text-[hsl(265_80%_65%)] hover:bg-[hsl(265_80%_65%_/_0.06)]',
-              collapsed ? 'justify-center p-2' : 'px-3 py-2'
-            )}
-          >
-            <BookOpen className="w-3.5 h-3.5 shrink-0" />
-            {!collapsed && <span>Prompt Library</span>}
-          </button>
-
-          {/* Project Brain */}
-          <button
-            onClick={() => setShowBrain(true)}
-            className={cn(
-              'flex items-center gap-2 rounded-lg transition-all duration-200 text-xs font-medium w-full border border-border text-muted-foreground hover:border-[hsl(4_90%_58%_/_0.5)] hover:text-[hsl(4_90%_58%)] hover:bg-[hsl(4_90%_58%_/_0.05)]',
-              collapsed ? 'justify-center p-2' : 'px-3 py-2'
-            )}
-          >
-            <Brain className="w-3.5 h-3.5 shrink-0" />
-            {!collapsed && <span>Project Brain</span>}
-          </button>
-
-          {/* Skill Creator */}
-          <button
-            onClick={onOpenSkillCreator}
-            className={cn(
-              'flex items-center gap-2 rounded-lg transition-all duration-200 text-xs font-medium w-full border border-border text-muted-foreground hover:border-[hsl(265_80%_65%_/_0.5)] hover:text-[hsl(265_80%_65%)] hover:bg-[hsl(265_80%_65%_/_0.06)]',
-              collapsed ? 'justify-center p-2' : 'px-3 py-2'
-            )}
-          >
-            <Wand2 className="w-3.5 h-3.5 shrink-0" />
-            {!collapsed && <span>Skill Creator</span>}
-          </button>
-
-          {/* Auto-Speak Toggle */}
-          <button
-            onClick={handleAutoSpeakToggle}
-            className={cn(
-              'flex items-center gap-2 rounded-lg transition-all duration-200 text-xs font-medium w-full border',
-              collapsed ? 'justify-center p-2' : 'px-3 py-2',
-              autoSpeak
-                ? 'bg-[hsl(4_90%_58%_/_0.1)] border-[hsl(4_90%_58%_/_0.45)] text-[hsl(4_90%_58%)]'
-                : 'border-border text-muted-foreground hover:border-[hsl(4_90%_58%_/_0.4)] hover:text-[hsl(4_90%_58%)] hover:bg-[hsl(4_90%_58%_/_0.05)]'
-            )}
-            title={autoSpeak ? 'Auto-Speak is ON — say "Hey MockJ" to start talking' : 'Auto-Speak is OFF — click to enable wake word listening'}
-          >
-            {autoSpeak
-              ? <Volume2 className="w-3.5 h-3.5 shrink-0" />
-              : <VolumeX className="w-3.5 h-3.5 shrink-0" />
-            }
-            {!collapsed && (
-              <span className="flex-1 text-left">Auto-Speak</span>
-            )}
-            {!collapsed && (
-              <span className={cn(
-                'text-[9px] font-bold px-1.5 py-0.5 rounded-full',
-                autoSpeak
-                  ? 'bg-[hsl(4_90%_58%_/_0.2)] text-[hsl(4_90%_58%)]'
-                  : 'bg-[hsl(224_15%_16%)] text-muted-foreground'
-              )}>
-                {autoSpeak ? 'ON' : 'OFF'}
-              </span>
-            )}
-          </button>
-
-          {/* Tokens */}
+        {/* ── Bottom strip ─────────────────────────────────────────── */}
+        <div className="px-3 py-4 space-y-2" style={{ borderTop: `1px solid ${GREEN}16` }}>
+          {/* Token balance */}
           <button
             onClick={() => navigate('/tokens')}
-            className={cn(
-              'flex items-center gap-2 rounded-lg transition-all duration-200 text-xs font-medium w-full border border-[hsl(38_95%_60%_/_0.45)] text-[hsl(38_95%_60%)] bg-[hsl(38_95%_60%_/_0.08)] hover:bg-[hsl(38_95%_60%_/_0.14)]',
-              collapsed ? 'justify-center p-2' : 'px-3 py-2'
-            )}
+            className="w-full flex items-center gap-2 px-3 py-2 rounded-xl transition-all"
+            style={{
+              background: `${GREEN}0a`,
+              border: `1px solid ${GREEN}33`,
+              color: GREEN,
+            }}
+            onMouseEnter={e => {
+              (e.currentTarget as HTMLButtonElement).style.background = `${GREEN}14`;
+              (e.currentTarget as HTMLButtonElement).style.boxShadow = `0 0 12px ${GREEN}20`;
+            }}
+            onMouseLeave={e => {
+              (e.currentTarget as HTMLButtonElement).style.background = `${GREEN}0a`;
+              (e.currentTarget as HTMLButtonElement).style.boxShadow = 'none';
+            }}
           >
             <Coins className="w-3.5 h-3.5 shrink-0" />
-            {!collapsed && <span>Tokens</span>}
+            <span className="text-xs font-semibold flex-1 text-left">Tokens</span>
+            <span className="text-xs font-black tabular-nums">
+              {wallet.loading ? '…' : wallet.balance.toLocaleString()}
+            </span>
           </button>
 
-          {/* Account / Settings */}
-          <button
-            onClick={() => navigate('/account')}
-            className={cn(
-              'flex items-center gap-2 rounded-lg transition-all duration-200 text-xs font-medium w-full border border-border text-muted-foreground hover:border-[hsl(265_80%_65%_/_0.5)] hover:text-[hsl(265_80%_65%)] hover:bg-[hsl(265_80%_65%_/_0.06)]',
-              collapsed ? 'justify-center p-2' : 'px-3 py-2'
-            )}
-          >
-            <Settings className="w-3.5 h-3.5 shrink-0" />
-            {!collapsed && <span>Account & Billing</span>}
-          </button>
-
-          {/* Personality Preset */}
-          {(() => {
-            const preset = PERSONALITY_PRESETS.find(p => p.id === currentPersonality);
-            return (
-              <button
-                onClick={onOpenPersonality}
-                className={cn(
-                  'flex items-center gap-2 rounded-lg transition-all duration-200 text-xs font-medium w-full border',
-                  collapsed ? 'justify-center p-2' : 'px-3 py-2'
-                )}
-                style={{
-                  borderColor: preset ? `hsl(${preset.color.replace('hsl(', '').replace(')', '').trim()} / 0.35)` : 'hsl(224 15% 20%)',
-                  color: preset?.color ?? 'hsl(210 20% 60%)',
-                  backgroundColor: preset ? `hsl(${preset.color.replace('hsl(', '').replace(')', '').trim()} / 0.06)` : 'transparent',
-                }}
+          {/* User + logout */}
+          {user ? (
+            <div className="flex items-center gap-2 px-2">
+              <div
+                className="w-7 h-7 rounded-full overflow-hidden shrink-0 flex items-center justify-center"
+                style={{ background: `${GREEN}14`, border: `1px solid ${GREEN}44` }}
               >
-                <Smile className="w-3.5 h-3.5 shrink-0" />
-                {!collapsed && <span className="truncate">{preset?.label ?? 'Personality'}</span>}
+                {user.avatar
+                  ? <img src={user.avatar} alt={user.username} className="w-full h-full object-cover" />
+                  : <User className="w-3.5 h-3.5" style={{ color: GREEN }} />}
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-xs font-semibold text-white truncate">{user.username}</p>
+                {subscription.subscribed && (
+                  <p className="text-[9px] font-bold" style={{ color: GREEN }}>Pro Active</p>
+                )}
+              </div>
+              <button
+                onClick={async () => { await logout(); toast.success('Signed out'); }}
+                className="w-6 h-6 flex items-center justify-center rounded-lg transition-colors"
+                style={{ color: `${GREEN}44` }}
+                onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = RED; }}
+                onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = `${GREEN}44`; }}
+              >
+                <LogOut className="w-3 h-3" />
               </button>
-            );
-          })()}
+            </div>
+          ) : (
+            <button
+              onClick={() => navigate('/auth')}
+              className="w-full flex items-center justify-center gap-2 py-2 rounded-xl text-xs font-black transition-all shine-sweep relative overflow-hidden"
+              style={{
+                background: `${GREEN}10`,
+                border: `1px solid ${GREEN}44`,
+                color: GREEN,
+                boxShadow: `0 0 12px ${GREEN}14`,
+              }}
+              onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.boxShadow = `0 0 20px ${GREEN}30`; }}
+              onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.boxShadow = `0 0 12px ${GREEN}14`; }}
+            >
+              <LogIn className="w-3.5 h-3.5" />
+              Sign In Free
+            </button>
+          )}
         </div>
-
-        {/* Footer */}
-        {!collapsed && (
-          <div className="px-4 py-2 pb-3">
-            <p className="text-[10px] text-muted-foreground opacity-50 text-center">MockJ AI · MoreiraJ · MLTX</p>
-          </div>
-        )}
       </aside>
 
-      {showBrain && <ProjectBrain onClose={() => setShowBrain(false)} />}
+      {showBrain  && <ProjectBrain onClose={() => setShowBrain(false)} />}
+      {showWallet && <WalletPanel  onClose={() => setShowWallet(false)} />}
+      {showMemory && <MemoryPanel  onClose={() => setShowMemory(false)} />}
     </>
   );
 }

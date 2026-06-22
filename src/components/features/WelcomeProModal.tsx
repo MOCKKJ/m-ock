@@ -35,7 +35,7 @@ export default function WelcomeProModal({ onClose }: WelcomeProModalProps) {
   const perks = [
     'Unlimited AI chat with Deep Reasoning',
     'Image generation & editing (all styles)',
-    'MLTXPRO video generation',
+    'Video generation with Sora 2',
     'All personality presets unlocked',
     'Priority response speed',
   ];

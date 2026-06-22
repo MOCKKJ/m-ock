@@ -1,0 +1,33 @@
+{
+  "name": "MockJ — AI Copilot",
+  "short_name": "MockJ",
+  "description": "Street-smart AI strategist. Built different. Wired for greatness.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#04030f",
+  "theme_color": "#04030f",
+  "orientation": "portrait-primary",
+  "categories": ["productivity", "utilities"],
+  "icons": [
+    {
+      "src": "/mockj-icon.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/mockj-icon.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "screenshots": [
+    {
+      "src": "/og-image.jpg",
+      "sizes": "1200x630",
+      "type": "image/jpeg",
+      "label": "MockJ AI Chat Interface"
+    }
+  ]
+}
