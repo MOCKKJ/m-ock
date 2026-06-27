@@ -40,6 +40,8 @@ interface VideoCheckBody {
 type RequestBody = ChatRequestBody | ImageRequestBody | VideoCreateBody | VideoCheckBody;
 type ActionType = 'chat' | 'image' | 'video';
 
+// Redeploy marker: ensures the hosted mocka-chat worker uses this Edge Function source, not the React page bundle.
+
 // ──────────────────────────────────────────────────────────────────────────────
 // Free limits — enforced BOTH per-user (DB) and per-device+IP (DB)
 // ──────────────────────────────────────────────────────────────────────────────
