@@ -91,7 +91,7 @@ const FIX_STEPS = [
   {
     id: '3',
     title: 'Add your domain to Authorized JavaScript origins',
-    detail: 'Add https://mockk.online and your OnSpace preview URL to the origins list',
+    detail: 'Add https://mockj.online and your OnSpace preview URL to the origins list',
     link: GOOGLE_CONSOLE_URL,
   },
   {

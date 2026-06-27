@@ -19,4 +19,4 @@ Allow: /
 Allow: /universe
 
 # Sitemaps
-Sitemap: https://mockk.online/sitemap.xml
+Sitemap: https://mockj.online/sitemap.xml

@@ -147,7 +147,7 @@ const SECTIONS = [
     number: '11',
     title: 'Contact Us',
     color: RED,
-    content: `For privacy-related questions, data requests, or complaints:\n\nPrivacy inquiries: privacy@mockj.ai\nLegal notices: legal@mockj.ai\nGeneral support: support@mockj.ai\n\nMockJ / MLTXPRO — mockk.online`,
+    content: `For privacy-related questions, data requests, or complaints:\n\nPrivacy inquiries: privacy@mockj.ai\nLegal notices: legal@mockj.ai\nGeneral support: support@mockj.ai\n\nMockJ / MLTXPRO — mockj.online`,
   },
 ];
 

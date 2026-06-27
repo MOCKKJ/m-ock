@@ -72,19 +72,46 @@ export async function* streamChatResponse(
   const { data: { session } } = await supabase.auth.getSession();
   const authToken = session?.access_token ?? supabaseKey;
 
-  const response = await fetch(
-    getFunctionUrl('mocka-chat'),
-    {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${authToken}`,
-        'apikey': supabaseKey,
-        'x-device-id': getDeviceId(),
-      },
-      body: JSON.stringify({ type: 'chat', messages, stream: true, personalityPreset: personality, knowledgeContext: combinedContext }),
+  let response: Response | null = null;
+  const configuredLocalChatUrl = import.meta.env.VITE_LOCAL_LLM_CHAT_URL;
+  const localChatUrl = configuredLocalChatUrl || ((window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') ? 'http://127.0.0.1:11434/v1/chat/completions' : '');
+  const localModel = import.meta.env.VITE_LOCAL_LLM_MODEL || 'llama3.1:8b';
+
+  if (localChatUrl) {
+    try {
+      response = await fetch(localChatUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: localModel,
+          messages: [
+            { role: 'system', content: 'You are MockJ, the MLTX AI assistant built by MoreiraJ. Keep answers direct, useful, street-smart, and practical. Do not mention provider names. When facts matter, be honest about uncertainty and never invent details.' },
+            ...(combinedContext ? [{ role: 'system' as const, content: combinedContext }] : []),
+            ...messages,
+          ],
+          stream: true,
+        }),
+      });
+    } catch (localError) {
+      console.warn('Local LLM unavailable, falling back to MockJ Edge Function:', localError);
     }
-  );
+  }
+
+  if (!response?.ok || !response.body) {
+    response = await fetch(
+      getFunctionUrl('mocka-chat'),
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${authToken}`,
+          'apikey': supabaseKey,
+          'x-device-id': getDeviceId(),
+        },
+        body: JSON.stringify({ type: 'chat', messages, stream: true, personalityPreset: personality, knowledgeContext: combinedContext }),
+      }
+    );
+  }
 
     if (!response.ok || !response.body) {
     const text = await response.text();

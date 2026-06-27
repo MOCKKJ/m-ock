@@ -192,9 +192,9 @@ Billing is monthly via Stripe. Cancel any time through the subscription portal. 
   {
     id: 'mockk-online',
     category: 'platforms',
-    title: 'mockk.online — Platform',
-    keywords: ['mockk.online', 'mockk website', 'mockk url', 'mockk domain'],
-    content: `mockk.online is an alternate/mirror domain associated with the MockJ/MLTX ecosystem. It may serve as a redirect, alternate brand entry point, or secondary deployment for MockJ-related services. Part of Jenny Moreira's broader digital footprint under MLTXPRO operations.`,
+    title: 'mockj.online — Platform',
+    keywords: ['mockj.online', 'mockk website', 'mockk url', 'mockk domain'],
+    content: `mockj.online is an alternate/mirror domain associated with the MockJ/MLTX ecosystem. It may serve as a redirect, alternate brand entry point, or secondary deployment for MockJ-related services. Part of Jenny Moreira's broader digital footprint under MLTXPRO operations.`,
     lastUpdated: '2026-06',
   },
 

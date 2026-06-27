@@ -18,7 +18,7 @@ const META = {
   description: 'MockJ is your ride-or-die AI copilot. Chat, generate images & videos, trade smarter, analyze the Florida Lottery, and earn MOCKJ tokens. Built by MoreiraJ × MLTX Studio.',
   image:       '/og-image.jpg',
   imageAlt:    'MockJ — AI Copilot · Built Different. Chat, generate images & videos, earn tokens.',
-  url:         'https://mockk.online',
+  url:         'https://mockj.online',
   siteName:    'MockJ',
   twitterCard: 'summary_large_image',
   twitterSite: '@mockjAI',
@@ -59,7 +59,7 @@ function XCard() {
             />
           </div>
           <div className="px-3 py-2.5 bg-black border-t border-[#2f3336]">
-            <p className="text-[#536471] text-xs mb-0.5">mockk.online</p>
+            <p className="text-[#536471] text-xs mb-0.5">mockj.online</p>
             <p className="text-white text-sm font-semibold leading-snug line-clamp-1">{META.title}</p>
             <p className="text-[#536471] text-xs mt-0.5 line-clamp-2 leading-relaxed">{META.description}</p>
           </div>
@@ -119,7 +119,7 @@ function LinkedInCard() {
           <div className="px-4 py-3 bg-[#f3f2ef]">
             <p className="text-[#1d2226] text-sm font-semibold leading-snug line-clamp-1">{META.title}</p>
             <p className="text-[#666d74] text-xs mt-0.5 line-clamp-2 leading-relaxed">{META.description}</p>
-            <p className="text-[#666d74] text-[11px] mt-1 uppercase tracking-wide">mockk.online</p>
+            <p className="text-[#666d74] text-[11px] mt-1 uppercase tracking-wide">mockj.online</p>
           </div>
         </div>
         {/* Reactions row */}
@@ -153,7 +153,7 @@ function DiscordCard() {
               <span className="text-[#989aa2] text-[10px]">Today at 4:20 PM</span>
             </div>
             <p className="text-[#dbdee1] text-sm mt-0.5 leading-relaxed">
-              🔥 MockJ 4 just dropped — <span className="text-[#00aff4] hover:underline cursor-pointer">https://mockk.online</span>
+              🔥 MockJ 4 just dropped — <span className="text-[#00aff4] hover:underline cursor-pointer">https://mockj.online</span>
             </p>
           </div>
         </div>
@@ -165,7 +165,7 @@ function DiscordCard() {
           {/* Embed body */}
           <div className="flex-1 bg-[#2b2d31] px-4 py-3 rounded-r">
             {/* Site name */}
-            <p className="text-[#989aa2] text-[11px] font-semibold mb-1.5">mockk.online</p>
+            <p className="text-[#989aa2] text-[11px] font-semibold mb-1.5">mockj.online</p>
             {/* Title */}
             <p className="text-[#00aff4] text-sm font-semibold leading-snug hover:underline cursor-pointer mb-1.5">
               {META.title}
@@ -319,7 +319,7 @@ export default function MetaPreviewPage() {
           <div>
             <p className="text-xs font-semibold text-foreground">Internal preview tool</p>
             <p className="text-xs text-muted-foreground mt-0.5">
-              These cards simulate how <strong className="text-foreground">mockk.online</strong> appears when pasted on each platform.
+              These cards simulate how <strong className="text-foreground">mockj.online</strong> appears when pasted on each platform.
               Social platforms cache og:images for 24–48h — use <code className="text-[hsl(191_97%_55%)] bg-[hsl(191_97%_55%_/_0.1)] px-1 rounded">?v=2</code> or their
               debug tools to force a re-scrape after image updates.
             </p>

@@ -6,7 +6,7 @@
 
   <!-- Homepage / Chat -->
   <url>
-    <loc>https://mockk.online/</loc>
+    <loc>https://mockj.online/</loc>
     <lastmod>2026-06-12</lastmod>
     <changefreq>weekly</changefreq>
     <priority>1.0</priority>
@@ -14,7 +14,7 @@
 
   <!-- Universe (brand/explore page) -->
   <url>
-    <loc>https://mockk.online/universe</loc>
+    <loc>https://mockj.online/universe</loc>
     <lastmod>2026-06-12</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
@@ -22,42 +22,42 @@
 
   <!-- SEO landing pages -->
   <url>
-    <loc>https://mockk.online/ai-copilot</loc>
+    <loc>https://mockj.online/ai-copilot</loc>
     <lastmod>2026-06-12</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.9</priority>
   </url>
 
   <url>
-    <loc>https://mockk.online/ai-image-generator</loc>
+    <loc>https://mockj.online/ai-image-generator</loc>
     <lastmod>2026-06-12</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.9</priority>
   </url>
 
   <url>
-    <loc>https://mockk.online/ai-voice-assistant</loc>
+    <loc>https://mockj.online/ai-voice-assistant</loc>
     <lastmod>2026-06-12</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
   </url>
 
   <url>
-    <loc>https://mockk.online/ai-coding-assistant</loc>
+    <loc>https://mockj.online/ai-coding-assistant</loc>
     <lastmod>2026-06-12</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
   </url>
 
   <url>
-    <loc>https://mockk.online/ai-agent-platform</loc>
+    <loc>https://mockj.online/ai-agent-platform</loc>
     <lastmod>2026-06-12</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
   </url>
 
   <url>
-    <loc>https://mockk.online/ai-website-builder</loc>
+    <loc>https://mockj.online/ai-website-builder</loc>
     <lastmod>2026-06-12</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>

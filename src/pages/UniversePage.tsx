@@ -68,7 +68,7 @@ const MOCKJ_CARDS: BrandCard[] = [
 const PRODUCTS: ProductItem[] = [
   { name: 'MockJ 4',           logo: Brain,      status: 'Live',        desc: 'The intelligence engine — chat, image, video, voice AI copilot.',    launch: '2025',    color: 'hsl(265 80% 65%)' },
   { name: 'MockChat.pro',      logo: MessageSquare, status: 'Live',    desc: 'Professional AI chat platform — fast, smart, and built for power users.', launch: '2025', color: 'hsl(142 70% 55%)' },
-  { name: 'Mockk.online',      logo: Zap,        status: 'Live',        desc: 'Lightning-fast MockJ interface — streamlined and mobile-first.',      launch: '2025',    color: 'hsl(191 97% 55%)' },
+  { name: 'MockJ.online',      logo: Zap,        status: 'Live',        desc: 'Lightning-fast MockJ interface — streamlined and mobile-first.',      launch: '2025',    color: 'hsl(191 97% 55%)' },
   { name: 'Camme.online',      logo: Globe,      status: 'Live',        desc: 'Creative AI media platform — images, video, and visual generation.',  launch: '2025',    color: 'hsl(38 95% 60%)' },
   { name: 'Moreiraj.online',   logo: Crown,      status: 'Live',        desc: 'The official MoreiraJ headquarters — brand, projects, and ecosystem.', launch: '2025',   color: 'hsl(38 95% 60%)' },
   { name: 'Mini MockJ',        logo: Cpu,        status: 'In Dev',      desc: 'Lightweight mobile-first AI assistant for everyday use.',             launch: 'Q4 2025', color: 'hsl(265 80% 65%)' },
@@ -80,7 +80,7 @@ const PRODUCTS: ProductItem[] = [
 ];
 
 const EXPAND_SECTIONS: ExpandSection[] = [
-  { key: 'company',   icon: Building2,      label: 'Company Information',  content: ['MoreiraJ is an independent AI & technology company.', 'Founded with the mission to democratize advanced AI tools for creators and builders.', 'Headquartered digitally-first with a global distributed team.', 'All products are built under the MLTX technology division.', 'Official website: moreiraj.online', 'MockJ platform: mockk.online · mockchat.pro', 'Creative AI media: camme.online'] },
+  { key: 'company',   icon: Building2,      label: 'Company Information',  content: ['MoreiraJ is an independent AI & technology company.', 'Founded with the mission to democratize advanced AI tools for creators and builders.', 'Headquartered digitally-first with a global distributed team.', 'All products are built under the MLTX technology division.', 'Official website: moreiraj.online', 'MockJ platform: mockj.online · mockchat.pro', 'Creative AI media: camme.online'] },
   { key: 'roadmap',   icon: Map,            label: 'Roadmaps',             content: ['Q3 2025 — MockJ Agent System (autonomous tasks)', 'Q4 2025 — Universe Map (interactive ecosystem explorer)', 'Q4 2025 — Mini MockJ (lightweight mobile app)', 'Q1 2026 — Universe CRM (AI-powered project management)', 'Q2 2026 — Creator Tools (monetization & licensing platform)', '2026 — Partner Portal & Agent Marketplace'] },
   { key: 'docs',      icon: BookOpen,       label: 'Documentation',        content: ['MockJ API — access chat, image, and video via REST API.', 'MLTX SDK — JavaScript and Python libraries for integration.', 'Edge Function Docs — serverless AI pipeline documentation.', 'Webhook Guide — real-time event hooks for all platform events.'] },
   { key: 'pricing',   icon: DollarSign,     label: 'Pricing',              content: ['Free Tier: 10 chats / 3 images / 1 video per day.', 'MockJ Pro: $50.99/month — unlimited everything + advanced tools.', 'MLTX Studio: Contact for enterprise licensing.', 'Creator License: Commercial use included with all Pro tiers.'] },
@@ -677,7 +677,7 @@ export default function UniversePage() {
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             {[
               { name: 'moreiraj.online',  desc: 'Official MoreiraJ HQ — brand, projects & ecosystem overview', color: 'hsl(38 95% 60%)',   url: 'https://moreiraj.online' },
-              { name: 'mockk.online',     desc: 'MockJ lightning interface — fast, mobile-first AI chat',       color: 'hsl(191 97% 55%)', url: 'https://mockk.online' },
+              { name: 'mockj.online',     desc: 'MockJ lightning interface — fast, mobile-first AI chat',       color: 'hsl(191 97% 55%)', url: 'https://mockj.online' },
               { name: 'camme.online',     desc: 'Creative AI media — images, video, and visual generation',    color: 'hsl(38 95% 60%)',   url: 'https://camme.online' },
               { name: 'mockchat.pro',     desc: 'Professional AI chat for power users and creators',           color: 'hsl(142 70% 55%)', url: 'https://mockchat.pro' },
               { name: 'MLTX Pro',        desc: 'MLTX Pro — MoreiraJ flagship platform powered by MLTX Studio',  color: 'hsl(265 80% 65%)', url: 'https://react-9b62xw.onspace.build/' },
@@ -727,7 +727,7 @@ export default function UniversePage() {
           <div className="flex items-center justify-center gap-3 mt-3 flex-wrap">
             {[
               { label: 'moreiraj.online', url: 'https://moreiraj.online' },
-              { label: 'mockk.online',     url: 'https://mockk.online' },
+              { label: 'mockj.online',     url: 'https://mockj.online' },
               { label: 'camme.online',     url: 'https://camme.online' },
               { label: 'mockchat.pro',     url: 'https://mockchat.pro' },
               { label: 'MLTX Pro',         url: 'https://react-9b62xw.onspace.build/' },
